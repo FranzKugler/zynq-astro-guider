@@ -28,3 +28,16 @@ def fourier_shift(img: np.ndarray, shift: tuple[float, float]) -> np.ndarray:
     kx = np.fft.fftfreq(nx)[None, :]
     F = np.fft.fft2(img) * np.exp(-2j * np.pi * (ky * sy + kx * sx))
     return np.fft.ifft2(F).real
+
+
+def rotate_field(img: np.ndarray, angle_deg: float, order: int = 3,
+                 mode: str = "reflect") -> np.ndarray:
+    """Rotate `img` by angle_deg about the frame center (reshape kept).
+
+    Models the *local* effect of field rotation inside a guide frame. A pole
+    that is off-frame adds a translation on top (which phase correlation
+    handles); the rotational shear about the frame center is the part that
+    decorrelates pure-translation matching.
+    """
+    from scipy.ndimage import rotate as _nd_rotate
+    return _nd_rotate(img, angle_deg, reshape=False, order=order, mode=mode)
