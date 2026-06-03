@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guider-hdl"
+version = "0.1.0"
+description = "Amaranth PL datapath for whole-field phase-correlation guiding"
+requires-python = ">=3.10"
+# Xilinx FFT IP is a black box (Vivado); everything around it is Amaranth and
+# cosim'd bit-exact against guider_golden.fixed_point via the Amaranth simulator.
+dependencies = ["amaranth>=0.5,<0.6"]
+
+[project.optional-dependencies]
+# guider-golden is the cosim reference (its fixed_point model = the bit spec).
+dev = ["pytest>=7", "guider-golden"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
