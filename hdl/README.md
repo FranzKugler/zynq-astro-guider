@@ -31,10 +31,12 @@ pytest -q
 ## Datapath blocks (roadmap)
 Each block gets a bit-exact pysim cosim against the matching model stage.
 
-- [x] `window.py`  WindowMul — Hann multiply + convergent rounding
-- [ ] cross-power conj(F_ref)*G  (complex multiply + BFP rescale)
+- [x] `window.py`       WindowMul — Hann multiply + convergent rounding
+- [x] `cross_power.py`  conj(F)*G complex multiply + BFP rescale
+      (CrossMul, ShiftFromMax, BfpRescale; block-max reducer deferred to stream)
 - [ ] phase-only normalize       (CORDIC angle -> unit vector, cordic/unit bits)
 - [ ] corner-turn buffer         (row/col transpose between FFT passes, BRAM)
+- [ ] block-max reducer          (streaming, feeds ShiftFromMax)
 - [ ] FFT-IP wrapper             (AXI-Stream, BFP exponent handling) + xsim
 - [ ] top-level stream assembly  + control/peak readout to PS
 
