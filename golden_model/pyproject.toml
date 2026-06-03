@@ -10,6 +10,10 @@ requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
 [project.optional-dependencies]
+# scikit-image (warp_polar) wird nur vom Rotations-Strang fourier_mellin.py
+# genutzt. __init__.py laedt den lazy, d.h. `import guider_golden` und der
+# Kern-Strang laufen ohne skimage; erst estimate_rotation (und die
+# Rotations-Tests) brauchen es. Installation: pip install -e ".[dev]"
 dev = ["pytest>=7", "matplotlib>=3.6", "scikit-image>=0.21"]
 
 [tool.setuptools.packages.find]
