@@ -97,10 +97,12 @@ GPIO IP blocks in the BD, but the 37-bit `xpower_max` spans words awkwardly; the
 CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
 
 ## Build + package flow
-1. `python -m guider_hdl.build` (new): emit Verilog for `PhaseCorrelatorPL` (+ CSR
-   wrapper) via `amaranth.back.verilog`, and generate the FFT IP XCI
-   (`ip/gen_fft_ip.tcl`, N=256). Needs yosys for Verilog (amaranth-yosys pkg) or
-   Vivado's `read_verilog` on the RTLIL — decide in the build sub-task.
+1. `python -m guider_hdl.build [outdir] [N]`: emit Verilog for `PhaseCorrelatorTop`
+   (CSR + datapath) via `amaranth.back.verilog` (needs `amaranth-yosys`). The FFT
+   is left as a black-box instance `fft_<N>`; generate its XCI with
+   `ip/gen_fft_ip.tcl` (the build prints the exact command). Emitted top ports are
+   flat `iface__field` (e.g. `s_axil__awaddr`, `xpower_f__payload`); the BD wrapper
+   renames them to Xilinx AXI-Lite / AXIS conventions.
 2. `bd/create_bd.tcl` (new): build the block design (PS7 preset for the Z7-Lite,
    the IP above, DMAs, switches, connections), generate the HDL wrapper, synth +
    impl, `write_bitstream`, and `write_hw_platform` (.xsa) for a possible BOOT
@@ -128,8 +130,14 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
 - [x] AXI-Lite CSR wrapper around PhaseCorrelatorPL (csr.py: AXILite,
       PhaseCorrelatorCsr, PhaseCorrelatorTop) + cosim (test_csr.py). Register map
       in the csr.py docstring is the UioBackend contract.
-- [ ] `guider_hdl.build`: emit Verilog + FFT IP XCI
-- [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa
+- [x] `guider_hdl.build`: emit Verilog for PhaseCorrelatorTop (FFT as black box
+      fft_<N>) + print the FFT-IP XCI command. test_build.py guards it.
+- [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa. Includes a
+      thin SystemVerilog wrapper that (a) renames the flat `iface__field` ports to
+      Xilinx AXI-Lite/AXIS interfaces, and (b) **derives AXIS `first` from TLAST**
+      (DMA gives TLAST, not TFIRST; CrossPower's block-max resets on `first`):
+      first = first-beat-after-reset or the beat after each `last`. (Alternatively
+      push that derivation into the Amaranth top so the wrapper is a pure rename.)
 - [ ] timing closure @ 100 MHz (FFT IP is the long pole)
 - [ ] .bit.bin + DT overlay + fpga_manager load over ssh
 - [ ] implement `UioBackend`; on-board validation vs `ModelBackend`

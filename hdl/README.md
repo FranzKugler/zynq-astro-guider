@@ -65,7 +65,9 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
             cosim'd in test_csr.py
 - [x] PS orchestration (target/): estimate_shift_pl + ModelBackend, bit-exact vs
       the model (guider_target); UioBackend awaits the bitstream
-- [ ] M5 bitstream integration -- see ../docs/bitstream_integration.md
+- [~] M5 bitstream integration -- see ../docs/bitstream_integration.md
+      - [x] `build.py`  emit Verilog for PhaseCorrelatorTop (FFT = black box
+            fft_<N>): `python -m guider_hdl.build [outdir] [N]` (needs amaranth-yosys)
 
 ## Top-level (DDR-streaming)
 Whole-field FFT frames do not fit in the XC7Z020's ~4.9 Mbit of BRAM (one N=256
