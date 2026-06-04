@@ -15,9 +15,13 @@ Stack: Amaranth HDL + Vivado 2025.2 + ikwzm Debian 12 (kernel 6.1.108-armv7-fpga
 - golden_model/  numpy/scipy reference pipeline = bit-exact reference for the HDL.
   Python package `guider_golden` (src layout). venv in golden_model/.venv.
   `pip install -e ".[dev]"`, then `pytest`.
-- hdl/      Amaranth + Xilinx FFT IP, cosim vs golden model (M4, not started)
+- hdl/      Amaranth DDR-streaming PL datapath, cosim vs golden model (M4 done).
+  Package `guider_hdl` (src layout, venv in hdl/.venv). Kernels bit-exact to the
+  model; Xilinx FFT IP xsim-verified; top.py = PhaseCorrelatorPL assembly.
 - boot/     device trees, SD build, U-Boot for the Z7-Lite
-- target/   on-board Python guiding app (later)
+- target/   on-board PS guiding app `guider_target` (src layout, venv in
+  target/.venv): orchestrates the PL pass schedule; ModelBackend cosim'd vs the
+  model. UioBackend (real AXI-DMA) scaffolded, awaits the integrated bitstream.
 - hardware/ KiCad MIPI adapter
 - docs/     architecture + decisions
 
@@ -32,9 +36,14 @@ Stack: Amaranth HDL + Vivado 2025.2 + ikwzm Debian 12 (kernel 6.1.108-armv7-fpga
 - Phase-only peak height is the live quality metric: peak < ~0.4 -> discard.
 
 ## Validation chain (each stage reproduces the previous on identical inputs)
-1. float golden model (numpy)            -- current (M3)
-2. fixed-point model, SAME estimate_shift interface, tested vs (1)  <- NEXT TASK
-3. FPGA FFT (Amaranth + Xilinx FFT IP), cosim'd vs (2)
+1. float golden model (numpy)                                        -- DONE
+2. fixed-point model, SAME estimate_shift interface, tested vs (1)   -- DONE
+3. PL datapath (Amaranth kernels + Xilinx FFT IP), cosim'd vs (2):   -- DONE
+   kernels bit-exact in pysim (FFT replaced by the model stub); the FFT IP itself
+   xsim'd vs a numpy DFT (sim/fft_cosim.py).
+4. PS orchestration (guider_target.estimate_shift_pl) reproduces (2) -- DONE
+   bit-exact via ModelBackend; same schedule then drives real HW (UioBackend).
+   <- NEXT: integrated bitstream + on-board validation vs ModelBackend.
 
 ## Hardware facts (hard-won)
 - SoC XC7Z020-CLG400, Vivado part xc7z020clg400-1. DDR3 512 MB. QSPI W25Q128.
@@ -52,9 +61,13 @@ Stack: Amaranth HDL + Vivado 2025.2 + ikwzm Debian 12 (kernel 6.1.108-armv7-fpga
   attached to the VM; hw_server runs on the VM.
 
 ## Milestones
-- M0 blinky: DONE.  M2 PS+DDR+Ethernet+Debian: DONE.  M3 golden model: IN PROGRESS.
-- Next: fixed-point model (M3) -> HDL FFT (M4). MIPI camera = separate high-risk
-  strand with a USB-UVC fallback (board has PS USB host).
+- M0 blinky: DONE.  M2 PS+DDR+Ethernet+Debian: DONE.  M3 golden + fixed-point
+  model: DONE.  M4 PL datapath (kernels cosim'd, FFT IP xsim'd, top assembled):
+  DONE.  PS orchestration (guider_target, ModelBackend-cosim'd): DONE.
+- Next (M5): integrated block design + bitstream (PhaseCorrelatorPL + AXI-DMA +
+  udmabuf) for the XC7Z020, then fill in UioBackend and validate on-board against
+  ModelBackend. MIPI camera = separate high-risk strand with a USB-UVC fallback
+  (board has PS USB host).
 
 ## House style
 German is fine. Direct, technical, pragmatic, minimal caveats. Editor: joe.
