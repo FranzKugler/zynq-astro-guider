@@ -136,9 +136,11 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
       inside the Amaranth top, so PhaseCorrelatorTop's data ports are TLAST-only
       (no TFIRST, which AXI-DMA doesn't provide). The BD SV wrapper is now a pure
       port rename. Cosim'd in test_axis.py (incl. 2-frame block-max reset).
-- [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa. The SV
-      wrapper just renames the flat `iface__field` ports to Xilinx AXI-Lite/AXIS
-      (valid/ready/last/payload -> TVALID/TREADY/TLAST/TDATA) -- no glue logic.
+- [~] `bd/create_bd.tcl` + `bd/phase_correlator_axi.v`: block design **validates**
+      (PS7 + 2 AXI-DMA + 2 AXIS switches + SmartConnects + the IP, interfaces
+      inferred from the Verilog wrapper's X_INTERFACE attrs). `-tclargs bd` =
+      create+validate (fast, FFT IP skipped); `-tclargs all` = + synth/impl/
+      bitstream/.xsa. Full build (timing closure) pending.
 - [ ] timing closure @ 100 MHz (FFT IP is the long pole)
 - [ ] .bit.bin + DT overlay + fpga_manager load over ssh
 - [ ] implement `UioBackend`; on-board validation vs `ModelBackend`
