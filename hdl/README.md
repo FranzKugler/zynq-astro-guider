@@ -41,8 +41,20 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
 - [x] `cosim.py`        end-to-end integration: all blocks chained through pysim
       with the model FFT substituted; estimate_shift_hw matches the model and
       recovers shifts (HW vs model shift delta ~0)
-- [ ] FFT-IP wrapper             (AXI-Stream, BFP exponent handling) + xsim
+- [~] FFT-IP wrapper SKELETON    ip/gen_fft_ip.tcl + fft_ip.py (Instance, AXI-S,
+      byte-aligned payload packing); config framing / tlast / blk_exp routing /
+      xsim cosim still TODO
 - [ ] top-level stream assembly  (synthesizable) + control/peak readout to PS
+
+## FFT IP (Vivado)
+Generate the FFT IP (config derived from the fixed-point model: BFP, convergent
+rounding, input_width=mant_bits, phase_factor_width=twiddle_bits, natural order):
+```bash
+vivado -mode batch -source ip/gen_fft_ip.tcl -tclargs 256 18 16 build/fft_ip
+```
+`fft_ip.py` instantiates it as a black box. The IP is not simulatable in pysim;
+verify it in Vivado xsim against the model (tolerance), and keep using the model
+FFT stub (guider_hdl.cosim) for fast pysim integration of the surrounding logic.
 
 ## Conventions
 - `fixed.py` holds primitives bit-matched to the model (`round_shift_expr` =
