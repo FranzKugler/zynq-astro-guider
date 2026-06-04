@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guider-target"
+version = "0.1.0"
+description = "On-board PS guiding app: orchestrates the PL phase-correlation datapath"
+requires-python = ">=3.10"
+# numpy only at runtime on the board; guider-golden is the verification reference
+# (and the ModelBackend), installed editable in dev alongside this package.
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "guider-golden"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
