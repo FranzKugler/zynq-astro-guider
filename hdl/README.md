@@ -34,7 +34,8 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
 - [x] `window.py`       WindowMul — Hann multiply + convergent rounding
 - [x] `cross_power.py`  conj(F)*G complex multiply + BFP rescale
       (CrossMul, ShiftFromMax, BfpRescale; block-max reducer deferred to stream)
-- [ ] phase-only normalize       (CORDIC angle -> unit vector, cordic/unit bits)
+- [x] `phase_only.py`   R/|R| via two-pass CORDIC (vectoring + rotating)
+      cordic_ref.py = bit-accurate Python spec; HW bit-exact to it, it ~= model
 - [ ] corner-turn buffer         (row/col transpose between FFT passes, BRAM)
 - [ ] block-max reducer          (streaming, feeds ShiftFromMax)
 - [ ] FFT-IP wrapper             (AXI-Stream, BFP exponent handling) + xsim
