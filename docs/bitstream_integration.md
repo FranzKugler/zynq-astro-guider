@@ -107,7 +107,9 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
 
 ## Task breakdown
 - [ ] confirm BOOT.bin exposes a usable FCLK + AXI-HP path (else .xsa BOOT rebuild)
-- [ ] AXI-Lite CSR wrapper around PhaseCorrelatorPL (Amaranth) + cosim
+- [x] AXI-Lite CSR wrapper around PhaseCorrelatorPL (csr.py: AXILite,
+      PhaseCorrelatorCsr, PhaseCorrelatorTop) + cosim (test_csr.py). Register map
+      in the csr.py docstring is the UioBackend contract.
 - [ ] `guider_hdl.build`: emit Verilog + FFT IP XCI
 - [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa
 - [ ] timing closure @ 100 MHz (FFT IP is the long pole)

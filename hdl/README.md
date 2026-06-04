@@ -60,8 +60,12 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       - [x] `top.py:PhaseCorrelatorPL`  instantiates the kernels + the shared FFT
             pass, exposes their AXIS endpoints + control/status as the PL's
             external contract; integration-cosim'd through the top -- test_top.py
-- [ ] PS orchestration (target/): DMA descriptor sequencing for the pass schedule,
-      transposed reads, peak argmax + parabolic subpixel
+      - [x] `csr.py:PhaseCorrelatorTop`  AXI-Lite CSR wrapper (one IP = AXI-Lite
+            control/status + AXIS data); register map = the UioBackend contract,
+            cosim'd in test_csr.py
+- [x] PS orchestration (target/): estimate_shift_pl + ModelBackend, bit-exact vs
+      the model (guider_target); UioBackend awaits the bitstream
+- [ ] M5 bitstream integration -- see ../docs/bitstream_integration.md
 
 ## Top-level (DDR-streaming)
 Whole-field FFT frames do not fit in the XC7Z020's ~4.9 Mbit of BRAM (one N=256
