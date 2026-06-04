@@ -44,7 +44,6 @@ set_property -dict [list \
     CONFIG.rounding_modes                       convergent_rounding \
     CONFIG.output_ordering                      natural_order \
     CONFIG.aresetn                              true \
-    CONFIG.ovflo                                true \
     CONFIG.complex_mult_type                    use_mults_resources \
     CONFIG.butterfly_type                       use_xtremedsp_slices \
 ] [get_ips $IPNAME]

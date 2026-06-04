@@ -58,6 +58,10 @@ class FftIP(Elaboratable):
         self.m_tlast = Signal()
         self.m_tready = Signal()
         self.m_blk_exp = Signal(8)        # from m_axis_data_tuser (BFP exponent)
+        # status channel: unused under BFP (block exponent rides on tuser); its
+        # tready is tied high so the IP never stalls waiting on it.
+        self.m_status_tdata = Signal(8)
+        self.m_status_tvalid = Signal()
 
         self._icw, self._ocw = icw, ocw
 
@@ -95,5 +99,8 @@ class FftIP(Elaboratable):
             o_m_axis_data_tvalid=self.m_tvalid,
             o_m_axis_data_tlast=self.m_tlast,
             i_m_axis_data_tready=self.m_tready,
+            o_m_axis_status_tdata=self.m_status_tdata,
+            o_m_axis_status_tvalid=self.m_status_tvalid,
+            i_m_axis_status_tready=Const(1),
         )
         return m
