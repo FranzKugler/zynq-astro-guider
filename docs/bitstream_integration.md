@@ -136,11 +136,15 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
       inside the Amaranth top, so PhaseCorrelatorTop's data ports are TLAST-only
       (no TFIRST, which AXI-DMA doesn't provide). The BD SV wrapper is now a pure
       port rename. Cosim'd in test_axis.py (incl. 2-frame block-max reset).
-- [~] `bd/create_bd.tcl` + `bd/phase_correlator_axi.v`: block design **validates**
-      (PS7 + 2 AXI-DMA + 2 AXIS switches + SmartConnects + the IP, interfaces
-      inferred from the Verilog wrapper's X_INTERFACE attrs). `-tclargs bd` =
-      create+validate (fast, FFT IP skipped); `-tclargs all` = + synth/impl/
-      bitstream/.xsa. Full build (timing closure) pending.
+- [x] `bd/create_bd.tcl` + `bd/phase_correlator_axi.v`: block design validates and
+      **the full bitstream builds** (PS7 + 2 AXI-DMA + 2 AXIS switches + SmartConnects
+      + the IP). `-tclargs bd` = create+validate (fast, FFT IP skipped); `-tclargs
+      all [N] [FREQ_MHZ]` = synth/impl/bitstream/.xsa → hdl/build/vivado_bd/.
+- [x] timing closure: the combinational phase-only CORDIC + cross-power are deep
+      paths (~116 ns), so the design closes only at a low FCLK. **At 6 MHz timing
+      is met** (WNS +29.9 ns, hold met); 6 MHz ≈ 10 fps at N=256, fine for guiding.
+      Pipelining the CORDIC (and the cross-power) to raise FCLK is a later
+      throughput upgrade, not a blocker.
 - [ ] timing closure @ 100 MHz (FFT IP is the long pole)
 - [ ] .bit.bin + DT overlay + fpga_manager load over ssh
 - [ ] implement `UioBackend`; on-board validation vs `ModelBackend`

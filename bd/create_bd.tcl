@@ -18,6 +18,10 @@
 
 set MODE [lindex $argv 0]; if {$MODE eq ""} {set MODE "bd"}
 set N    [lindex $argv 1]; if {$N    eq ""} {set N    256}
+# PL clock. The phase-only CORDIC + cross-power are combinational (deep paths),
+# so the datapath closes only at a low FCLK (~8 MHz) until they are pipelined.
+# 6 MHz gives margin and is plenty for guide-frame rates (~10 fps at N=256).
+set FREQ_MHZ [lindex $argv 2]; if {$FREQ_MHZ eq ""} {set FREQ_MHZ 6}
 
 set PART     xc7z020clg400-1
 set DESIGN   phase_corr
@@ -26,7 +30,6 @@ set PROJDIR  $ROOT/hdl/build/vivado_bd
 set RTL_TOP  $ROOT/hdl/build/rtl/phase_correlator_top.v
 set RTL_WRAP $ROOT/bd/phase_correlator_axi.v
 set TDATA_BYTES 16                                   ;# 128-bit uniform AXIS
-set FREQ_MHZ 100
 
 if {![file exists $RTL_TOP]} {
     error "missing $RTL_TOP -- run: python -m guider_hdl.build hdl/build/rtl $N"
