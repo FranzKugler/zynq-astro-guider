@@ -47,7 +47,7 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
 - [~] FFT-IP wrapper SKELETON    ip/gen_fft_ip.tcl + fft_ip.py (Instance, AXI-S,
       byte-aligned payload packing); config framing / tlast / blk_exp routing
       into the synthesizable top still TODO
-- [~] top-level stream assembly  (synthesizable, DDR-streaming) -- in progress:
+- [x] top-level stream assembly  (synthesizable, DDR-streaming):
       - [x] `stream.py`       AXI-Stream interface (valid/ready/first/last/payload)
       - [x] `phase_stage.py`  CrossPower (pass 1: conj(F)*G + streaming block-max)
             and RescalePhase (pass 2: BFP rescale + phase-only); pysim cosim'd
@@ -57,7 +57,11 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       - [x] `fft_pass.py:FftPass`  one 1-D FFT pass: config/tlast/output reframe/
             block-exp around FftIP; `fft_ip.py:FftStub` behavioral drop-in lets
             the framing be pysim'd -- test_fft_pass.py (transform itself: xsim)
-      - [ ] `top.py` PL datapath wiring + AXIS DMA endpoints + control/peak readout
+      - [x] `top.py:PhaseCorrelatorPL`  instantiates the kernels + the shared FFT
+            pass, exposes their AXIS endpoints + control/status as the PL's
+            external contract; integration-cosim'd through the top -- test_top.py
+- [ ] PS orchestration (target/): DMA descriptor sequencing for the pass schedule,
+      transposed reads, peak argmax + parabolic subpixel
 
 ## Top-level (DDR-streaming)
 Whole-field FFT frames do not fit in the XC7Z020's ~4.9 Mbit of BRAM (one N=256
