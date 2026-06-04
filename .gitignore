@@ -17,6 +17,7 @@ golden_model/data/
 # Vivado / FPGA build artifacts
 *.jou
 *.log
+*.pb
 *.str
 *.bit
 *.bin

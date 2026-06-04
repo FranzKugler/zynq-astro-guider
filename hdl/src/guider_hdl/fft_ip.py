@@ -9,11 +9,20 @@ This is the synthesis path only -- the IP cannot run in pysim. For simulation
 the FFT is substituted by the model's BFP FFT (see guider_hdl.cosim); the IP
 itself is verified in Vivado xsim against the model, tolerance-based.
 
+The transform itself is verified: sim/fft_cosim.py drives this exact IP config in
+Vivado xsim and matches a numpy DFT to ~1e-5 (see that module). The streaming core
+frames at a fixed phase offset from the input tlast (captured frame == DFT of a +1
+cyclic shift); that offset is a *common* cyclic shift and cancels in the
+cross-power conj(F_ref)*F_img, so it is benign for the guider. The synthesizable
+top-level still owns explicit framing.
+
 STATUS: skeleton. Port map + payload packing are in place. Still TODO for the
 synthesizable top-level:
   * s_axis_config framing: build the config word (FWD/INV bit, scaling sched)
     and drive s_axis_config_tvalid once per frame.
   * tlast generation on the input stream (last sample of each N-point frame).
+    NB: the core's frame phase is fixed relative to this, not steered by it; rely
+    on the common-rotation cancellation rather than chasing a tlast alignment.
   * route m_axis_data_tuser -> BFP block exponent and accumulate it across the
     row/column passes (mirrors the model's per-pass exponent tracking).
   * backpressure: honor s_axis_data_tready / drive m_axis_data_tready.

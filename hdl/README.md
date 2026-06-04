@@ -41,9 +41,12 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
 - [x] `cosim.py`        end-to-end integration: all blocks chained through pysim
       with the model FFT substituted; estimate_shift_hw matches the model and
       recovers shifts (HW vs model shift delta ~0)
+- [x] FFT-IP xsim cosim   sim/fft_cosim.py drives the generated IP in Vivado xsim
+      and matches a numpy DFT to ~1e-5 (up to the core's fixed common frame
+      rotation, which cancels in the cross-power -- see the module docstring)
 - [~] FFT-IP wrapper SKELETON    ip/gen_fft_ip.tcl + fft_ip.py (Instance, AXI-S,
-      byte-aligned payload packing); config framing / tlast / blk_exp routing /
-      xsim cosim still TODO
+      byte-aligned payload packing); config framing / tlast / blk_exp routing
+      into the synthesizable top still TODO
 - [ ] top-level stream assembly  (synthesizable) + control/peak readout to PS
 
 ## FFT IP (Vivado)
@@ -55,6 +58,16 @@ vivado -mode batch -source ip/gen_fft_ip.tcl -tclargs 256 18 16 build/fft_ip
 `fft_ip.py` instantiates it as a black box. The IP is not simulatable in pysim;
 verify it in Vivado xsim against the model (tolerance), and keep using the model
 FFT stub (guider_hdl.cosim) for fast pysim integration of the surrounding logic.
+
+Run the xsim cosim (generates the IP if missing, drives it, checks vs numpy DFT):
+```bash
+python sim/fft_cosim.py 16        # VIVADO=/path/to/vivado if not the default
+```
+It passes when both the magnitude spectrum and the best-fit (over cyclic frame
+rotation) DFT error are within tolerance. The streaming core frames at a fixed
+phase offset from the cold-start testbench (captured frame == DFT of a +1 cyclic
+shift); that common rotation cancels in the cross-power, so it is harmless --
+hence the rotation-tolerant check. See sim/fft_cosim.py for the full reasoning.
 
 ## Conventions
 - `fixed.py` holds primitives bit-matched to the model (`round_shift_expr` =
