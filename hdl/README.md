@@ -52,7 +52,8 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       - [x] `phase_stage.py`  CrossPower (pass 1: conj(F)*G + streaming block-max)
             and RescalePhase (pass 2: BFP rescale + phase-only); pysim cosim'd
             bit-exact (CORDIC tolerance) vs the model -- test_phase_stage.py
-      - [ ] `window.py` stream wrapper (Hann coef ROM, AXI-S)
+      - [x] `window.py:WindowStream`  Hann window kernel (sample x coef DMA
+            streams -> WindowMul); cosim'd vs the model -- test_window.py
       - [ ] FFT-pass kernel (fft_ip.py framing) + behavioral stub for pysim
       - [ ] `top.py` PL datapath wiring + AXIS DMA endpoints + control/peak readout
 
