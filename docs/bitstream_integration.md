@@ -95,15 +95,15 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
 4. `target/`: implement `UioBackend` against the uio/udmabuf regions; validate
    vs `ModelBackend`.
 
-## Open decisions (confirm before building the BD Tcl)
-1. **DMA/routing**: 2× AXI-DMA + 2 AXIS switches (shared, PS-routed) — recommended,
-   economical — vs. per-kernel DMA (simplest wiring, but ~6 DMAs / only 4 HP ports).
-2. **Control plane**: AXI-Lite CSR wrapper in Amaranth (recommended, one IP, one
-   uio region) vs. AXI GPIO IP in the BD.
-3. **PL clock**: single FCLK @ 100 MHz for the whole datapath (recommended; revisit
-   if the FFT IP misses timing on the −1 part).
-4. **Packaging**: add `PhaseCorrelatorPL` as RTL via Verilog wrapper (recommended)
-   vs. `package_ip` (IP-XACT, more ceremony).
+## Decisions
+1. **DMA/routing**: 2× AXI-DMA (MM2S0+S2MM, MM2S1) + 2 AXIS switches, PS-routed
+   per pass. (DECIDED)
+2. **Control plane**: AXI-Lite CSR wrapper in Amaranth — one IP, one uio region.
+   (DECIDED)
+3. **PL clock**: single FCLK @ 100 MHz for the whole datapath; revisit only if the
+   FFT IP misses timing on the −1 part. (DECIDED, revisit on timing)
+4. **Packaging**: add `PhaseCorrelatorPL` as RTL via a Verilog wrapper rather than
+   `package_ip`. (DECIDED)
 
 ## Task breakdown
 - [ ] confirm BOOT.bin exposes a usable FCLK + AXI-HP path (else .xsa BOOT rebuild)
