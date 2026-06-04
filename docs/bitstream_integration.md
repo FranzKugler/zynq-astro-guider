@@ -19,6 +19,21 @@ loop is over ssh (`ssh franz@zynq7020`):
 JTAG (the usbip/FT232H path) is kept in reserve for **only** two things:
 ILA / live signal probing, and PS7 re-init / unbricking.
 
+### Board state (checked 2026-06-04, over ssh)
+- fpga_manager `fpga0` ("Xilinx Zynq FPGA Manager", `f8007000.devcfg`) **state =
+  operating**; DT-overlay configfs present; DT has `fpga-full` + `amba_pl`. →
+  **runtime full-bitstream load via an overlay works; no BOOT.bin rebuild for
+  loading.** (Kernel 6.1.108-armv7-fpga.)
+- **`u-dma-buf` NOT loaded** (no `/dev/udmabuf*`) → install/load it (UioBackend
+  needs it for contiguous DMA buffers).
+- **`fclkcfg` NOT loaded** (no `/sys/class/fclkcfg/`) → set the PL clock via the
+  overlay's clock config (or install fclkcfg); confirm FCLK_CLK0 ≈ 100 MHz
+  (`sudo grep -i fclk /sys/kernel/debug/clk/clk_summary`).
+- **CMA = 16 MB** (14 MB free) → enough for small N; for N=256 bump `cma=` in
+  bootargs or point u-dma-buf at a reserved-memory region.
+- CSR access: declare the AXI-Lite CSR as `generic-uio` in the overlay
+  (→ `/dev/uioN`) or mmap `/dev/mem` at the `amba_pl` base.
+
 **PS7 caveat.** On Zynq-7000 the PS7 (DDR, PLLs, clocks, MIO, AXI ports) is
 initialised once at boot by the FSBL in the salvaged BOOT.bin; a runtime PL
 bitstream swap only reconfigures the fabric. DDR + base clocks already work
@@ -106,7 +121,10 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
    `package_ip`. (DECIDED)
 
 ## Task breakdown
-- [ ] confirm BOOT.bin exposes a usable FCLK + AXI-HP path (else .xsa BOOT rebuild)
+- [x] confirm runtime bitstream load works (fpga_manager operating, fpga-full +
+      overlay configfs) -- yes, no BOOT rebuild. Follow-ups (all ssh-side): install
+      u-dma-buf; confirm/set FCLK_CLK0; CMA sizing for N=256; generic-uio vs /dev/mem
+      for the CSR. See "Board state" above.
 - [x] AXI-Lite CSR wrapper around PhaseCorrelatorPL (csr.py: AXILite,
       PhaseCorrelatorCsr, PhaseCorrelatorTop) + cosim (test_csr.py). Register map
       in the csr.py docstring is the UioBackend contract.
