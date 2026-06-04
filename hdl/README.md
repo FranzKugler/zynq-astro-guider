@@ -54,7 +54,9 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
             bit-exact (CORDIC tolerance) vs the model -- test_phase_stage.py
       - [x] `window.py:WindowStream`  Hann window kernel (sample x coef DMA
             streams -> WindowMul); cosim'd vs the model -- test_window.py
-      - [ ] FFT-pass kernel (fft_ip.py framing) + behavioral stub for pysim
+      - [x] `fft_pass.py:FftPass`  one 1-D FFT pass: config/tlast/output reframe/
+            block-exp around FftIP; `fft_ip.py:FftStub` behavioral drop-in lets
+            the framing be pysim'd -- test_fft_pass.py (transform itself: xsim)
       - [ ] `top.py` PL datapath wiring + AXIS DMA endpoints + control/peak readout
 
 ## Top-level (DDR-streaming)

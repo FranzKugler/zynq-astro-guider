@@ -16,16 +16,12 @@ cyclic shift); that offset is a *common* cyclic shift and cancels in the
 cross-power conj(F_ref)*F_img, so it is benign for the guider. The synthesizable
 top-level still owns explicit framing.
 
-STATUS: skeleton. Port map + payload packing are in place. Still TODO for the
-synthesizable top-level:
-  * s_axis_config framing: build the config word (FWD/INV bit, scaling sched)
-    and drive s_axis_config_tvalid once per frame.
-  * tlast generation on the input stream (last sample of each N-point frame).
-    NB: the core's frame phase is fixed relative to this, not steered by it; rely
-    on the common-rotation cancellation rather than chasing a tlast alignment.
-  * route m_axis_data_tuser -> BFP block exponent and accumulate it across the
-    row/column passes (mirrors the model's per-pass exponent tracking).
-  * backpressure: honor s_axis_data_tready / drive m_axis_data_tready.
+This module is the bare IP port map + payload packing. The framing around it --
+config word (FWD/INV), per-row tlast, output reframing, tuser->block-exponent,
+and backpressure -- lives in fft_pass.FftPass, which drives this `core` (or the
+behavioral FftStub below in pysim). NB on tlast: the core's frame phase is fixed
+relative to it, not steered by it; rely on the common-rotation cancellation
+above rather than chasing a tlast alignment.
 """
 from __future__ import annotations
 from amaranth import *
@@ -112,4 +108,60 @@ class FftIP(Elaboratable):
             o_m_axis_status_tvalid=self.m_status_tvalid,
             i_m_axis_status_tready=Const(1),
         )
+        return m
+
+
+class FftStub(Elaboratable):
+    """Sim-only behavioral stand-in for FftIP, same AXI-S port surface.
+
+    Does NOT transform -- it is an identity 1-deep skid that mimics the IP's
+    streaming protocol (VALID/READY handshake, per-frame TLAST passthrough, a
+    TUSER block exponent) so the FftPass framing/config/backpressure logic can be
+    exercised in pysim. The transform itself is verified separately against the
+    real IP in Vivado xsim (sim/fft_cosim.py). Inject it via FftPass(core=...).
+    """
+
+    def __init__(self, n: int = 256, input_width: int = 18,
+                 output_width: int | None = None, phase_width: int = 16,
+                 blk_exp: int = 0):
+        self.n = n
+        self.input_width = input_width
+        self.output_width = output_width or input_width
+        self.blk_exp = blk_exp
+        ow = self.output_width
+        self.s_cfg_tdata = Signal(8)
+        self.s_cfg_tvalid = Signal()
+        self.s_cfg_tready = Signal()
+        self.s_re = Signal(signed(input_width))
+        self.s_im = Signal(signed(input_width))
+        self.s_tvalid = Signal()
+        self.s_tlast = Signal()
+        self.s_tready = Signal()
+        self.m_re = Signal(signed(ow))
+        self.m_im = Signal(signed(ow))
+        self.m_tvalid = Signal()
+        self.m_tlast = Signal()
+        self.m_tready = Signal()
+        self.m_blk_exp = Signal(8)
+
+    def elaborate(self, platform):
+        m = Module()
+        valid = Signal()
+        re_r = Signal(signed(self.output_width))
+        im_r = Signal(signed(self.output_width))
+        last_r = Signal()
+        m.d.comb += [
+            self.s_cfg_tready.eq(1),
+            self.s_tready.eq(self.m_tready | ~valid),   # accept if sink ready or empty
+            self.m_tvalid.eq(valid),
+            self.m_re.eq(re_r), self.m_im.eq(im_r),
+            self.m_tlast.eq(last_r),
+            self.m_blk_exp.eq(self.blk_exp),
+        ]
+        accept = self.s_tvalid & self.s_tready
+        with m.If(accept):
+            m.d.sync += [valid.eq(1), re_r.eq(self.s_re), im_r.eq(self.s_im),
+                         last_r.eq(self.s_tlast)]
+        with m.Elif(self.m_tvalid & self.m_tready):
+            m.d.sync += valid.eq(0)
         return m
