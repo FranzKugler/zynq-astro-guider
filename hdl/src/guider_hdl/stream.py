@@ -37,3 +37,50 @@ class Stream(wiring.Signature):
             "last":    Out(1),
             "payload": Out(payload_shape),
         })
+
+
+class AXIStream(wiring.Signature):
+    """AXIS-native stream: VALID/READY/LAST + payload, **no FIRST**.
+
+    What the AXI-DMA actually presents (TVALID/TREADY/TLAST/TDATA). FIRST is not
+    an AXIS signal, so the boundary uses this; `FirstGen` regenerates FIRST for
+    the internal kernels (which use it to reset per-frame accumulators). Keeping
+    the IP boundary AXIS-native makes the block-design wrapper a pure rename.
+    """
+
+    def __init__(self, payload_shape):
+        self.payload_shape = payload_shape
+        super().__init__({
+            "valid":   Out(1),
+            "ready":   In(1),
+            "last":    Out(1),
+            "payload": Out(payload_shape),
+        })
+
+
+class FirstGen(wiring.Component):
+    """AXIS-native input -> internal `Stream`, regenerating FIRST from LAST/reset.
+
+    FIRST marks the first accepted beat after reset and the beat after each LAST.
+    Pure pass-through otherwise (one bit of state, no data latency), so the
+    datapath stays fully elastic.
+    """
+
+    def __init__(self, payload_shape):
+        super().__init__({
+            "ext": In(AXIStream(payload_shape)),     # from the DMA (no FIRST)
+            "int": Out(Stream(payload_shape)),       # to the kernel (with FIRST)
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+        e, i = self.ext, self.int
+        at_start = Signal(init=1)                    # next accepted beat is a frame start
+        m.d.comb += [
+            i.valid.eq(e.valid), e.ready.eq(i.ready),
+            i.last.eq(e.last), i.payload.eq(e.payload),
+            i.first.eq(at_start),
+        ]
+        with m.If(e.valid & e.ready):
+            m.d.sync += at_start.eq(e.last)
+        return m

@@ -21,6 +21,7 @@ from amaranth import *
 from amaranth.lib import wiring
 from amaranth.lib.wiring import In, Out, connect, flipped
 
+from .stream import AXIStream, FirstGen
 from .top import PhaseCorrelatorPL
 from .cordic_ref import CordicParams
 
@@ -142,7 +143,16 @@ class PhaseCorrelatorCsr(wiring.Component):
 
 
 class PhaseCorrelatorTop(wiring.Component):
-    """PhaseCorrelatorPL + AXI-Lite CSR = the packaged PL IP (AXI-Lite + AXIS)."""
+    """The packaged PL IP: AXI-Lite CSR + AXIS-native (TLAST-only) data ports.
+
+    Wraps PhaseCorrelatorPL with the CSR and a `FirstGen` on each input stream, so
+    the IP boundary speaks plain AXI-DMA AXIS (no FIRST) -- the block-design
+    wrapper is then a pure rename. Output streams drop FIRST (DMA needs only LAST).
+    """
+
+    _INPUTS = ("window_sample", "window_coef", "fft_in",
+               "xpower_f", "xpower_g", "rescale_r")
+    _OUTPUTS = ("window_out", "fft_out", "xpower_r", "rescale_p")
 
     def __init__(self, n: int = 256, mant_bits: int = 18, input_bits: int = 12,
                  window_bits: int = 12, phase_width: int = 16,
@@ -154,26 +164,30 @@ class PhaseCorrelatorTop(wiring.Component):
         self._csr = PhaseCorrelatorCsr(
             sh_bits=(self._pl._rescale.max_sh).bit_length(),
             max_bits=self._pl._cross.in_bits, blk_bits=16)
-        # expose the AXI-Lite slave + every AXIS data port of the datapath
+        members = self._pl.signature.members
         sig = {"s_axil": In(AXILite())}
-        for name, member in self._pl.signature.members.items():
-            if name not in ("fft_inverse", "rescale_sh", "xpower_max",
-                            "xpower_max_valid", "fft_blk_exp_sum"):
-                sig[name] = member
+        for name in self._INPUTS:
+            sig[name] = In(AXIStream(members[name].signature.payload_shape))
+        for name in self._OUTPUTS:
+            sig[name] = Out(AXIStream(members[name].signature.payload_shape))
         super().__init__(sig)
 
     def elaborate(self, platform):
         m = Module()
         m.submodules.pl = pl = self._pl
         m.submodules.csr = csr = self._csr
-
-        # AXIS data ports straight through
-        for name, member in self._pl.signature.members.items():
-            if name in ("fft_inverse", "rescale_sh", "xpower_max",
-                        "xpower_max_valid", "fft_blk_exp_sum"):
-                continue
-            connect(m, flipped(getattr(self, name)), getattr(pl, name))
         connect(m, flipped(self.s_axil), csr.s_axil)
+
+        members = self._pl.signature.members
+        for name in self._INPUTS:                    # AXIS-native -> FIRST -> kernel
+            fg = FirstGen(members[name].signature.payload_shape)
+            m.submodules["fg_" + name] = fg
+            connect(m, flipped(getattr(self, name)), fg.ext)
+            connect(m, fg.int, getattr(pl, name))
+        for name in self._OUTPUTS:                    # kernel -> AXIS-native (drop FIRST)
+            ext, pls = getattr(self, name), getattr(pl, name)
+            m.d.comb += [ext.valid.eq(pls.valid), pls.ready.eq(ext.ready),
+                         ext.last.eq(pls.last), ext.payload.eq(pls.payload)]
 
         m.d.comb += [
             pl.fft_inverse.eq(csr.o_fft_inverse),

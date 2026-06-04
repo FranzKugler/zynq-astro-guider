@@ -60,9 +60,10 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       - [x] `top.py:PhaseCorrelatorPL`  instantiates the kernels + the shared FFT
             pass, exposes their AXIS endpoints + control/status as the PL's
             external contract; integration-cosim'd through the top -- test_top.py
-      - [x] `csr.py:PhaseCorrelatorTop`  AXI-Lite CSR wrapper (one IP = AXI-Lite
-            control/status + AXIS data); register map = the UioBackend contract,
-            cosim'd in test_csr.py
+      - [x] `csr.py:PhaseCorrelatorTop`  the packaged IP: AXI-Lite CSR + AXIS-native
+            data ports (`stream.py:FirstGen` regenerates FIRST from LAST/reset, so
+            the boundary is TLAST-only like real AXI-DMA). Register map = the
+            UioBackend contract. Cosim'd in test_csr.py + test_axis.py
 - [x] PS orchestration (target/): estimate_shift_pl + ModelBackend, bit-exact vs
       the model (guider_target); UioBackend awaits the bitstream
 - [~] M5 bitstream integration -- see ../docs/bitstream_integration.md

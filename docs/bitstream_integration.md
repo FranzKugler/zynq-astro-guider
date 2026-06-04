@@ -132,12 +132,13 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
       in the csr.py docstring is the UioBackend contract.
 - [x] `guider_hdl.build`: emit Verilog for PhaseCorrelatorTop (FFT as black box
       fft_<N>) + print the FFT-IP XCI command. test_build.py guards it.
-- [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa. Includes a
-      thin SystemVerilog wrapper that (a) renames the flat `iface__field` ports to
-      Xilinx AXI-Lite/AXIS interfaces, and (b) **derives AXIS `first` from TLAST**
-      (DMA gives TLAST, not TFIRST; CrossPower's block-max resets on `first`):
-      first = first-beat-after-reset or the beat after each `last`. (Alternatively
-      push that derivation into the Amaranth top so the wrapper is a pure rename.)
+- [x] AXIS-native boundary: `stream.py:FirstGen` regenerates FIRST from LAST/reset
+      inside the Amaranth top, so PhaseCorrelatorTop's data ports are TLAST-only
+      (no TFIRST, which AXI-DMA doesn't provide). The BD SV wrapper is now a pure
+      port rename. Cosim'd in test_axis.py (incl. 2-frame block-max reset).
+- [ ] `bd/create_bd.tcl`: block design + synth/impl + bitstream + .xsa. The SV
+      wrapper just renames the flat `iface__field` ports to Xilinx AXI-Lite/AXIS
+      (valid/ready/last/payload -> TVALID/TREADY/TLAST/TDATA) -- no glue logic.
 - [ ] timing closure @ 100 MHz (FFT IP is the long pole)
 - [ ] .bit.bin + DT overlay + fpga_manager load over ssh
 - [ ] implement `UioBackend`; on-board validation vs `ModelBackend`
