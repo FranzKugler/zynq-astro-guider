@@ -36,8 +36,8 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       (CrossMul, ShiftFromMax, BfpRescale; block-max reducer deferred to stream)
 - [x] `phase_only.py`   R/|R| via two-pass CORDIC (vectoring + rotating)
       cordic_ref.py = bit-accurate Python spec; HW bit-exact to it, it ~= model
+- [x] `cross_power.py:BlockMax`  streaming block-max (BFP pass 1, feeds ShiftFromMax)
 - [ ] corner-turn buffer         (row/col transpose between FFT passes, BRAM)
-- [ ] block-max reducer          (streaming, feeds ShiftFromMax)
 - [ ] FFT-IP wrapper             (AXI-Stream, BFP exponent handling) + xsim
 - [ ] top-level stream assembly  + control/peak readout to PS
 

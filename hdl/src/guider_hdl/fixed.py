@@ -36,6 +36,11 @@ def round_shift_var_expr(value, sh, max_sh: int):
     return Mux(sh == 0, value, q + up)
 
 
+def abs_expr(value):
+    """Unsigned magnitude of a signed Value."""
+    return Mux(value < 0, -value, value)
+
+
 def saturate_expr(value, bits: int):
     """Clamp signed `value` to a signed `bits`-wide range (== model's np.clip)."""
     hi = (1 << (bits - 1)) - 1
