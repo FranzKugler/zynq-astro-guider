@@ -38,8 +38,11 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
       cordic_ref.py = bit-accurate Python spec; HW bit-exact to it, it ~= model
 - [x] `cross_power.py:BlockMax`  streaming block-max (BFP pass 1, feeds ShiftFromMax)
 - [x] `corner_turn.py`  row/col transpose between FFT passes (ping-pong BRAM)
+- [x] `cosim.py`        end-to-end integration: all blocks chained through pysim
+      with the model FFT substituted; estimate_shift_hw matches the model and
+      recovers shifts (HW vs model shift delta ~0)
 - [ ] FFT-IP wrapper             (AXI-Stream, BFP exponent handling) + xsim
-- [ ] top-level stream assembly  + control/peak readout to PS
+- [ ] top-level stream assembly  (synthesizable) + control/peak readout to PS
 
 ## Conventions
 - `fixed.py` holds primitives bit-matched to the model (`round_shift_expr` =
