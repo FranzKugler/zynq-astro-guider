@@ -47,7 +47,35 @@ Each block gets a bit-exact pysim cosim against the matching model stage.
 - [~] FFT-IP wrapper SKELETON    ip/gen_fft_ip.tcl + fft_ip.py (Instance, AXI-S,
       byte-aligned payload packing); config framing / tlast / blk_exp routing
       into the synthesizable top still TODO
-- [ ] top-level stream assembly  (synthesizable) + control/peak readout to PS
+- [~] top-level stream assembly  (synthesizable, DDR-streaming) -- in progress:
+      - [x] `stream.py`       AXI-Stream interface (valid/ready/first/last/payload)
+      - [x] `phase_stage.py`  CrossPower (pass 1: conj(F)*G + streaming block-max)
+            and RescalePhase (pass 2: BFP rescale + phase-only); pysim cosim'd
+            bit-exact (CORDIC tolerance) vs the model -- test_phase_stage.py
+      - [ ] `window.py` stream wrapper (Hann coef ROM, AXI-S)
+      - [ ] FFT-pass kernel (fft_ip.py framing) + behavioral stub for pysim
+      - [ ] `top.py` PL datapath wiring + AXIS DMA endpoints + control/peak readout
+
+## Top-level (DDR-streaming)
+Whole-field FFT frames do not fit in the XC7Z020's ~4.9 Mbit of BRAM (one N=256
+corner-turn buffer alone is ~4.7 Mbit), so frames live in **PS DDR3** and the PL
+is a set of AXI-Stream compute kernels driven by the PS via AXI-DMA. The on-chip
+`corner_turn.py` ping-pong is kept for small-N/BRAM experiments; at whole-field
+sizes the inter-pass transpose is a DMA addressing pattern (column-major read),
+not an on-chip buffer.
+
+PS-orchestrated pass schedule (each pass = one DMA in, compute, DMA out):
+```
+  ref:  window -> FFT2(rows) -> [transpose via DMA] -> FFT2(cols) -> F  (DDR)
+  img:  window -> FFT2(rows) -> [transpose via DMA] -> FFT2(cols) -> G  (DDR)
+  xpow: F,G -> CrossPower  -> R (DDR) + block max ---.   (pass 1, global BFP)
+  norm: R,sh -> RescalePhase -> P (DDR)              `-> sh = ShiftFromMax(max)
+  corr: P -> IFFT2(rows) -> [transpose] -> IFFT2(cols) -> corr (DDR)
+  peak: PS reads corr, argmax + parabolic subpixel (zero FPGA cost)
+```
+A single FFT IP is time-shared across all FFT/IFFT passes. Verified in pysim with
+the FFT substituted by the behavioral model (the IP transform itself is xsim-
+verified, see below); only the streaming/framing glue is exercised in pysim.
 
 ## FFT IP (Vivado)
 Generate the FFT IP (config derived from the fixed-point model: BFP, convergent
