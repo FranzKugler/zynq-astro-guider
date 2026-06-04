@@ -19,6 +19,21 @@ loop is over ssh (`ssh franz@zynq7020`):
 JTAG (the usbip/FT232H path) is kept in reserve for **only** two things:
 ILA / live signal probing, and PS7 re-init / unbricking.
 
+### ⚠️ Ethernet runs through the PL — the bitstream MUST carry ENET0 EMIO
+Ethernet (RTL8201F) is PS-GEM routed to the PHY via **EMIO through the PL** (bank
+35, MII). A **full** bitstream that doesn't route GEM→PHY drops the network the
+instant it programs → ssh dies. Confirmed 2026-06-04: the first `phase_corr` load
+(overlay applied fine — see below) knocked the board off the network; recovery =
+power-cycle (reloads the salvaged BOOT.bin). **So `bd/create_bd.tcl` must add PS7
+ENET0 via EMIO + the bank-35 MII pin XDC**, or the ssh-driven test is impossible
+(loading the bitstream disconnects the link we test over). Need the bank-35 pin
+map from the salvaged design's XDC or the board schematic. (Memory: full-bitstream-
+drops-ethernet.)
+
+The load path itself works: ikwzm **dtbocfg** overlay — stage the .dtbo, then
+`echo 1 > /sys/kernel/config/device-tree/overlays/<name>/status` programs the
+FPGA. The .bit.bin (bootgen `-process_bitstream bin`) loaded fine.
+
 ### Board state (checked 2026-06-04, over ssh)
 - fpga_manager `fpga0` ("Xilinx Zynq FPGA Manager", `f8007000.devcfg`) **state =
   operating**; DT-overlay configfs present; DT has `fpga-full` + `amba_pl`. →

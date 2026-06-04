@@ -1,0 +1,38 @@
+/dts-v1/;
+/plugin/;
+
+// Runtime device-tree overlay for the phase-correlation PL (ikwzm flow).
+//  - programs the bitstream into the full-reconfig fpga-region;
+//  - adds an fclkcfg node so FCLK_CLK0 can be set to the datapath's clock
+//    (~6 MHz until the CORDIC is pipelined; see docs/bitstream_integration.md).
+//
+// Build + load on the board:
+//   dtc -@ -I dts -O dtb -o phase_corr.dtbo bd/phase_corr_overlay.dts
+//   sudo mkdir -p /sys/kernel/config/device-tree/overlays/phase_corr
+//   cat phase_corr.dtbo | sudo tee .../phase_corr/dtbo > /dev/null
+//   echo 6000000 | sudo tee /sys/class/fclkcfg/fpga0_clk0/rate
+// The AXI-Lite registers live on M_AXI_GP0 (CSR 0x4000_0000, dma0 0x4040_0000,
+// dma1 0x4041_0000, sw_in 0x43C0_0000, sw_out 0x43C1_0000); access via /dev/mem
+// or generic-uio. DMA buffers come from u-dma-buf(-mgr).
+
+/ {
+    fragment@0 {
+        target = <&fpga_full>;
+        __overlay__ {
+            #address-cells = <1>;
+            #size-cells = <1>;
+            firmware-name = "phase_corr_wrapper.bit.bin";
+        };
+    };
+
+    fragment@1 {
+        target-path = "/";
+        __overlay__ {
+            fpga0_clk0 {
+                compatible = "ikwzm,fclkcfg";
+                clocks = <&clkc 15>;          // FCLK_CLK0
+                device-name = "fpga0_clk0";
+            };
+        };
+    };
+};
