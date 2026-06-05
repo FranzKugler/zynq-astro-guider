@@ -70,6 +70,11 @@ create_bd_design $DESIGN
 
 # --- Processing System 7 (no board preset; enable the ports we use) ---
 set ps [create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7 ps7]
+# make FIXED_IO + DDR external as DDR_*/FIXED_IO_* (the custom top passes them
+# through); no board preset, no auto AXI. Do this before the config below.
+apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
+    -config {make_external "FIXED_IO, DDR" apply_board_preset "0" \
+             Master "Disable" Slave "Disable"} $ps
 set_property -dict [list \
     CONFIG.PCW_USE_M_AXI_GP0          {1} \
     CONFIG.PCW_USE_S_AXI_HP0          {1} \
