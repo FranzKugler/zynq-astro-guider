@@ -78,7 +78,6 @@ apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
 set_property -dict [list \
     CONFIG.PCW_USE_M_AXI_GP0          {1} \
     CONFIG.PCW_USE_S_AXI_HP0          {1} \
-    CONFIG.PCW_USE_S_AXI_HP1          {1} \
     CONFIG.PCW_EN_CLK0_PORT           {1} \
     CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ $FREQ_MHZ \
     CONFIG.PCW_FCLK_CLK0_BUF          {TRUE} \
@@ -98,7 +97,6 @@ make_bd_intf_pins_external [get_bd_intf_pins ps7/MDIO_ETHERNET_0]
 set fclk   [get_bd_pins ps7/FCLK_CLK0]
 set gp0    [get_bd_intf_pins ps7/M_AXI_GP0]
 set hp0    [get_bd_intf_pins ps7/S_AXI_HP0]
-set hp1    [get_bd_intf_pins ps7/S_AXI_HP1]
 
 # --- reset ---
 set rstgen [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset rst0]
@@ -160,20 +158,14 @@ connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M02_AXI] [get_bd_intf_pins dma1/S
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M03_AXI] [get_bd_intf_pins sw_in/S_AXI_CTRL]
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M04_AXI] [get_bd_intf_pins sw_out/S_AXI_CTRL]
 
-# --- memory bus: reads on HP0, writes on HP1 (separate ports so concurrent
-#     read F + read G + write R don't deadlock on one port at scale) ---
-set scr [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smc_rd]
-set_property CONFIG.NUM_SI {2} $scr
-set_property CONFIG.NUM_MI {1} $scr
-connect_bd_intf_net [get_bd_intf_pins dma0/M_AXI_MM2S] [get_bd_intf_pins smc_rd/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins dma1/M_AXI_MM2S] [get_bd_intf_pins smc_rd/S01_AXI]
-connect_bd_intf_net [get_bd_intf_pins smc_rd/M00_AXI] $hp0
-
-set scw [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smc_wr]
-set_property CONFIG.NUM_SI {1} $scw
-set_property CONFIG.NUM_MI {1} $scw
-connect_bd_intf_net [get_bd_intf_pins dma0/M_AXI_S2MM] [get_bd_intf_pins smc_wr/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins smc_wr/M00_AXI] $hp1
+# --- memory bus: all DMA masters -> SmartConnect -> PS HP0 ---
+set scm [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smc_mem]
+set_property CONFIG.NUM_SI {3} $scm
+set_property CONFIG.NUM_MI {1} $scm
+connect_bd_intf_net [get_bd_intf_pins dma0/M_AXI_MM2S] [get_bd_intf_pins smc_mem/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins dma0/M_AXI_S2MM] [get_bd_intf_pins smc_mem/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins dma1/M_AXI_MM2S] [get_bd_intf_pins smc_mem/S02_AXI]
+connect_bd_intf_net [get_bd_intf_pins smc_mem/M00_AXI] $hp0
 
 # --- data path: MM2S -> sw_in -> kernel inputs ---
 connect_bd_intf_net [get_bd_intf_pins dma0/M_AXIS_MM2S] [get_bd_intf_pins sw_in/S00_AXIS]
@@ -200,13 +192,12 @@ connect_bd_intf_net [get_bd_intf_pins sw_out/M00_AXIS] [get_bd_intf_pins dma0/S_
 foreach p {pc/aclk dma0/s_axi_lite_aclk dma0/m_axi_mm2s_aclk dma0/m_axi_s2mm_aclk \
            dma1/s_axi_lite_aclk dma1/m_axi_mm2s_aclk \
            sw_in/aclk sw_in/s_axi_ctrl_aclk sw_out/aclk sw_out/s_axi_ctrl_aclk \
-           smc_ctrl/aclk smc_rd/aclk smc_wr/aclk \
-           ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK ps7/S_AXI_HP1_ACLK} {
+           smc_ctrl/aclk smc_mem/aclk ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK} {
     connect_bd_net $fclk [get_bd_pins $p]
 }
 foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
            sw_in/aresetn sw_in/s_axi_ctrl_aresetn sw_out/aresetn sw_out/s_axi_ctrl_aresetn \
-           smc_ctrl/aresetn smc_rd/aresetn smc_wr/aresetn} {
+           smc_ctrl/aresetn smc_mem/aresetn} {
     connect_bd_net $arstn [get_bd_pins $p]
 }
 
