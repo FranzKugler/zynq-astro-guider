@@ -14,9 +14,9 @@ __all__ = ["PLBackend", "shift_from_max", "estimate_shift_pl", "ModelBackend"]
 
 
 def __getattr__(name):
-    # UioBackend pulls in /dev/uio + udmabuf mmap glue that only exists on the
+    # UioBackend pulls in /dev/mem + udmabuf mmap glue that only exists on the
     # board; load it lazily so importing guider_target works on the dev host.
     if name == "UioBackend":
-        from .hw_backend import UioBackend
+        from .uio_backend import UioBackend
         return UioBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
