@@ -160,6 +160,14 @@ CSR is cleaner.) The AXI-DMA and AXIS-switch each bring their own AXI-Lite.
       is met** (WNS +29.9 ns, hold met); 6 MHz ≈ 10 fps at N=256, fine for guiding.
       Pipelining the CORDIC (and the cross-power) to raise FCLK is a later
       throughput upgrade, not a blocker.
-- [ ] timing closure @ 100 MHz (FFT IP is the long pole)
-- [ ] .bit.bin + DT overlay + fpga_manager load over ssh
-- [ ] implement `UioBackend`; on-board validation vs `ModelBackend`
+- [x] GEM-EMIO Ethernet in the bitstream (create_enet_test.tcl proved it; folded
+      into create_bd.tcl) so loading keeps macb/ssh alive -- confirmed on board.
+- [x] .bit.bin (bootgen -process_bitstream bin) + DT overlay (phase_corr_overlay.dts:
+      fpga-full firmware-name + fclkcfg) loaded via ikwzm dtbocfg over ssh.
+      **On board (2026-06-05): bitstream programs, FCLK0 set to 6 MHz via fclkcfg,
+      CSR ID reads 0x47445231, network stays up (ping 0% loss).** AXI-Lite control
+      plane works; CSR @ 0x4000_0000, dma0/1 @ 0x4040/0x4041_0000, sw_in/out @
+      0x43C0/0x43C1_0000; /dev/mem for regs, u-dma-buf for frame buffers.
+- [ ] implement `UioBackend` (DMA + switch routing + register map) and run the
+      pass schedule; on-board validation vs `ModelBackend`.
+- [ ] later: pipeline the CORDIC/cross-power to raise FCLK above ~8 MHz.

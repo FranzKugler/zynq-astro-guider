@@ -21,7 +21,7 @@
         __overlay__ {
             #address-cells = <1>;
             #size-cells = <1>;
-            firmware-name = "phase_corr_wrapper.bit.bin";
+            firmware-name = "phase_corr_top.bit.bin";
         };
     };
 
