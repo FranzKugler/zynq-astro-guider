@@ -117,6 +117,7 @@ proc mk_dma {name s2mm} {
         CONFIG.c_sg_include_stscntrl_strm {0} \
         CONFIG.c_include_mm2s            {1} \
         CONFIG.c_include_s2mm            $s2mm \
+        CONFIG.c_sg_length_width         {26} \
         CONFIG.c_m_axis_mm2s_tdata_width {128} \
         CONFIG.c_m_axi_mm2s_data_width   {128} \
         CONFIG.c_mm2s_burst_size         {16}]
