@@ -202,6 +202,18 @@ foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
 }
 
 assign_bd_address
+
+# optional: System ILA on dma0.M_AXI_MM2S to capture the failing read transaction
+# (DECERR debug). tclargs[3] == "ila". Produces a .ltx probes file.
+if {[lindex $argv 3] eq "ila"} {
+    set rd_net [get_bd_intf_nets -of [get_bd_intf_pins dma0/M_AXI_MM2S]]
+    apply_bd_automation -rule xilinx.com:bd_rule:debug -dict [list \
+        $rd_net [list AXI_R_ADDR "Data and Trigger" AXI_R_DATA "Data and Trigger" \
+                      AXI_W_ADDR "Data" AXI_W_DATA "Data" AXI_B "Data and Trigger" \
+                      CLK_SRC "/ps7/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0"]]
+    puts "System ILA added on dma0/M_AXI_MM2S."
+}
+
 regenerate_bd_layout
 save_bd_design
 validate_bd_design
