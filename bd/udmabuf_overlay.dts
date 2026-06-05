@@ -1,0 +1,24 @@
+/dts-v1/;
+/plugin/;
+
+// u-dma-buf frame buffers for the phase-correlation pipeline (ikwzm u-dma-buf).
+// Eight 1 MiB CMA buffers (one N=256 frame = 256*256*16 B = 1 MiB at the 128-bit
+// AXIS word width); UioBackend assigns roles (samples, F, G, R, P, corr, scratch).
+// Independent of the FPGA overlay, so it can be (re)applied without reprogramming.
+// Needs CMA >= 8 MiB.
+
+/ {
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+            udmabuf0 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf0"; size = <0x100000>; };
+            udmabuf1 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf1"; size = <0x100000>; };
+            udmabuf2 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf2"; size = <0x100000>; };
+            udmabuf3 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf3"; size = <0x100000>; };
+            udmabuf4 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf4"; size = <0x100000>; };
+            udmabuf5 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf5"; size = <0x100000>; };
+            udmabuf6 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf6"; size = <0x100000>; };
+            udmabuf7 { compatible = "ikwzm,u-dma-buf"; device-name = "udmabuf7"; size = <0x100000>; };
+        };
+    };
+};
