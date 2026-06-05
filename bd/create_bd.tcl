@@ -77,7 +77,17 @@ set_property -dict [list \
     CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ $FREQ_MHZ \
     CONFIG.PCW_FCLK_CLK0_BUF          {TRUE} \
     CONFIG.PCW_USE_FABRIC_INTERRUPT   {0} \
+    CONFIG.PCW_ENET0_PERIPHERAL_ENABLE {1} \
+    CONFIG.PCW_ENET0_ENET0_IO          {EMIO} \
+    CONFIG.PCW_ENET0_GRP_MDIO_ENABLE   {1} \
+    CONFIG.PCW_ENET0_GRP_MDIO_IO       {EMIO} \
 ] $ps
+
+# ENET0 on EMIO -> the bank-35 RTL8201F MII (proven in create_enet_test.tcl); a
+# custom top (phase_corr_top.v) maps GMII to MII so loading this bitstream keeps
+# the board's macb/ssh alive. See full-bitstream-drops-ethernet memory.
+make_bd_intf_pins_external [get_bd_intf_pins ps7/GMII_ETHERNET_0]
+make_bd_intf_pins_external [get_bd_intf_pins ps7/MDIO_ETHERNET_0]
 
 set fclk   [get_bd_pins ps7/FCLK_CLK0]
 set gp0    [get_bd_intf_pins ps7/M_AXI_GP0]
@@ -192,11 +202,15 @@ validate_bd_design
 puts "BD '$DESIGN' created and validated."
 
 if {$MODE eq "all"} {
-    make_wrapper -files [get_files $PROJDIR/${DESIGN}.srcs/sources_1/bd/${DESIGN}/${DESIGN}.bd] -top
-    add_files -norecurse $PROJDIR/${DESIGN}.gen/sources_1/bd/${DESIGN}/hdl/${DESIGN}_wrapper.v
-    set_property top ${DESIGN}_wrapper [current_fileset]
+    # custom top (phase_corr_top.v) wraps the BD: maps GMII EMIO -> bank-35 MII +
+    # MDIO IOBUF + DDR/FIXED_IO passthrough, so the datapath bitstream keeps Ethernet.
+    generate_target synthesis [get_files $PROJDIR/${DESIGN}.srcs/sources_1/bd/${DESIGN}/${DESIGN}.bd]
+    add_files -norecurse [list $ROOT/bd/phase_corr_top.v $ROOT/bd/enet_test_pins.xdc]
+    set_property top phase_corr_top [current_fileset]
+    update_compile_order -fileset sources_1
     launch_runs impl_1 -to_step write_bitstream -jobs 8
     wait_on_run impl_1
     write_hw_platform -fixed -include_bit -force $PROJDIR/${DESIGN}.xsa
-    puts "bitstream + .xsa written under $PROJDIR"
+    set bit $PROJDIR/${DESIGN}.runs/impl_1/phase_corr_top.bit
+    puts "bitstream ([file exists $bit]) + .xsa written under $PROJDIR"
 }
