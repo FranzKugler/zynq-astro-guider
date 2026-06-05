@@ -112,9 +112,11 @@ class UdmaBuf:
         self.m[0:len(b)] = b
         self.to_device()
 
-    def read_complex(self, re_w, im_w, n):
+    def read_complex(self, re_w, im_w, n, offset_beats=0):
         self.from_device()
-        words = np.frombuffer(self.m[0:n * WORD_BYTES], np.uint64).reshape(n, 2)
+        start = offset_beats * WORD_BYTES
+        words = np.frombuffer(self.m[start:start + n * WORD_BYTES],
+                              np.uint64).reshape(n, 2)
         vals = words[:, 0].astype(object) | (words[:, 1].astype(object) << 64)
         re_mask, im_mask = (1 << re_w) - 1, (1 << im_w) - 1
         re = np.fromiter((_signext(int(v) & re_mask, re_w) for v in vals), np.int64, n)
@@ -186,18 +188,24 @@ class UioBackend(PLBackend):
         # the cross-power kernel joins F and G, so both MM2S must run together;
         # kick S2MM (R) + both MM2S, THEN wait for all three.
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bR.phys, nb)
+        # Kick S2MM with 2 extra beats so we can discard the pipeline-flush prefix.
+        # The first 2 beats that land in the R buffer are residual AXIS switch
+        # FIFO data (from the state before the previous reset); the kernel then
+        # produces n beats of correct data. We over-allocate by 2 beats and skip
+        # those on readback. The DMADecErr on MM2S(F) fires post-completion (the
+        # DMA re-arms after TLAST because RS is sticky in this c_sg_length_width=26
+        # build); we wait only on S2MM IOC which is the true completion signal.
+        PREFIX = 2
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bR.phys,
+                  (n + PREFIX) * WORD_BYTES)
         _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bF.phys, nb)
         _dma_kick(self.dma1, MM2S_CR, MM2S_SA, MM2S_LEN, bG.phys, nb)
-        chans = [(self.dma0, S2MM_SR, "dma0.S2MM(R)"),
-                 (self.dma0, MM2S_SR, "dma0.MM2S(F)"),
-                 (self.dma1, MM2S_SR, "dma1.MM2S(G)")]
         t0 = time.time()
-        while not all(reg.rd(sr) & DMASR_IDLE for reg, sr, _ in chans):
+        while not (self.dma0.rd(S2MM_SR) & DMASR_IOC):
             if time.time() - t0 > 10.0:
-                st = "  ".join("%s=0x%08x" % (nm, reg.rd(sr)) for reg, sr, nm in chans)
-                raise TimeoutError("DMA stall: " + st)
-        r_re, r_im = bR.read_complex(inb, inb, n)
+                raise TimeoutError("S2MM timeout SR=0x%08x" %
+                                   self.dma0.rd(S2MM_SR))
+        r_re, r_im = bR.read_complex(inb, inb, n, offset_beats=PREFIX)
         block_max = self.csr.rd(CSR_XPMAX_LO) | (self.csr.rd(CSR_XPMAX_HI) << 32)
         return r_re.reshape(f_re.shape), r_im.reshape(f_re.shape), int(block_max)
 
