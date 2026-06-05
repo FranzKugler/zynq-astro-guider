@@ -37,7 +37,8 @@ CSR_ID_MAGIC = 0x47445231
 MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN = 0x00, 0x04, 0x18, 0x28
 S2MM_CR, S2MM_SR, S2MM_DA, S2MM_LEN = 0x30, 0x34, 0x48, 0x58
 DMACR_RS, DMACR_RESET = 0x1, 0x4
-DMASR_HALTED, DMASR_IDLE = 0x1, 0x2
+DMASR_HALTED, DMASR_IDLE, DMASR_IOC = 0x1, 0x2, 0x1000
+DMASR_DONE = DMASR_IDLE | DMASR_IOC      # transfer complete (either flag)
 
 # AXIS switch (ROUTING_MODE=1): MI_MUX[i] selects the slave for master i
 SW_CTRL_COMMIT, SW_MUX0, SW_DISABLE = 0x00, 0x40, 0x80000000
@@ -78,12 +79,20 @@ class UdmaBuf:
         self.phys = int(open(sysfs + "phys_addr").read(), 16)
         self.size = int(open(sysfs + "size").read())
         self._sysfs = sysfs
+        # u-dma-buf syncs act on [sync_offset, sync_offset+sync_size]; sync_size
+        # defaults to 0 (no-op!). Set the whole buffer, bidirectional.
+        self._set("sync_offset", "0")
+        self._set("sync_size", str(self.size))
+        self._set("sync_direction", "0")
         self._fd = os.open("/dev/%s" % name, os.O_RDWR)
         self.m = mmap.mmap(self._fd, self.size)
 
-    def _sync(self, which):
+    def _set(self, which, val):
         with open(self._sysfs + which, "w") as f:
-            f.write("1")
+            f.write(val)
+
+    def _sync(self, which):
+        self._set(which, "1")
 
     def to_device(self):                     # flush CPU cache -> DDR before DMA reads
         self._sync("sync_for_device")
@@ -114,15 +123,27 @@ class UdmaBuf:
         return re, im
 
 
-def _dma_run(reg, cr, sr, addr_off, len_off, phys, nbytes, timeout=5.0):
-    """Kick one DMA channel (direct mode) and wait for Idle."""
+def _dma_reset(reg):
+    """Soft-reset the whole AXI DMA core (clears stale state incl. sticky IOC)."""
+    reg.wr(MM2S_CR, DMACR_RESET)
+    t0 = time.time()
+    while reg.rd(MM2S_CR) & DMACR_RESET:
+        if time.time() - t0 > 1.0:
+            raise TimeoutError("DMA reset stuck")
+
+
+def _dma_kick(reg, cr, addr_off, len_off, phys, nbytes):
+    """Start one DMA channel (direct mode); does NOT wait (transfers run in parallel)."""
     reg.wr(cr, DMACR_RS)
     reg.wr(addr_off, phys)
     reg.wr(len_off, nbytes)                  # writing LENGTH starts the transfer
+
+
+def _dma_wait(reg, sr, timeout=5.0, what=""):
     t0 = time.time()
     while not (reg.rd(sr) & DMASR_IDLE):
         if time.time() - t0 > timeout:
-            raise TimeoutError("DMA timeout, SR=0x%08x" % reg.rd(sr))
+            raise TimeoutError("DMA %s timeout, SR=0x%08x" % (what, reg.rd(sr)))
 
 
 class AxisSwitch:
@@ -162,15 +183,20 @@ class UioBackend(PLBackend):
         self.sw_in.route({M_XP_F: S_DMA0, M_XP_G: S_DMA1}, 6)
         self.sw_out.route({0: O_XP_R}, 1)
         nb = n * WORD_BYTES
-        # S2MM (R) first so it is ready, then both MM2S (F via dma0, G via dma1)
-        self.dma0.wr(S2MM_CR, DMACR_RS); self.dma0.wr(S2MM_DA, bR.phys)
-        self.dma0.wr(S2MM_LEN, nb)
-        _dma_run(self.dma0, MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN, bF.phys, nb)
-        _dma_run(self.dma1, MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN, bG.phys, nb)
+        # the cross-power kernel joins F and G, so both MM2S must run together;
+        # kick S2MM (R) + both MM2S, THEN wait for all three.
+        _dma_reset(self.dma0); _dma_reset(self.dma1)
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bR.phys, nb)
+        _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bF.phys, nb)
+        _dma_kick(self.dma1, MM2S_CR, MM2S_SA, MM2S_LEN, bG.phys, nb)
+        chans = [(self.dma0, S2MM_SR, "dma0.S2MM(R)"),
+                 (self.dma0, MM2S_SR, "dma0.MM2S(F)"),
+                 (self.dma1, MM2S_SR, "dma1.MM2S(G)")]
         t0 = time.time()
-        while not (self.dma0.rd(S2MM_SR) & DMASR_IDLE):
-            if time.time() - t0 > 5.0:
-                raise TimeoutError("S2MM timeout SR=0x%08x" % self.dma0.rd(S2MM_SR))
+        while not all(reg.rd(sr) & DMASR_IDLE for reg, sr, _ in chans):
+            if time.time() - t0 > 10.0:
+                st = "  ".join("%s=0x%08x" % (nm, reg.rd(sr)) for reg, sr, nm in chans)
+                raise TimeoutError("DMA stall: " + st)
         r_re, r_im = bR.read_complex(inb, inb, n)
         block_max = self.csr.rd(CSR_XPMAX_LO) | (self.csr.rd(CSR_XPMAX_HI) << 32)
         return r_re.reshape(f_re.shape), r_im.reshape(f_re.shape), int(block_max)
