@@ -207,6 +207,7 @@ class PhaseCorrelatorTop(wiring.Component):
 
         m.d.comb += [
             pl.fft_inverse.eq(csr.o_fft_inverse),
+            pl.fft_frame_sync.eq(csr.o_dpath_reset),
             pl.rescale_sh.eq(csr.o_rescale_sh),
             csr.i_xpower_max.eq(pl.xpower_max),
             csr.i_xpower_max_valid.eq(pl.xpower_max_valid),

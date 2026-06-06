@@ -37,6 +37,10 @@ class FftPass(wiring.Component):
             "inp":           In(Stream(complex_layout(mant_bits))),
             "out":           Out(Stream(complex_layout(mant_bits))),
             "inverse":       In(1),
+            # pulse before each frame: reload the IP config (so fft_inverse can
+            # change between forward and inverse frames) and resync the row/output
+            # framing counters. Does NOT reset the FFT IP itself.
+            "frame_sync":    In(1),
             "o_blk_exp_sum": Out(unsigned(16)),
         })
 
@@ -90,4 +94,12 @@ class FftPass(wiring.Component):
                 m.d.sync += exp_sum.eq(exp_sum + core.m_blk_exp)
         m.d.comb += self.o_blk_exp_sum.eq(
             exp_sum + Mux(row_end, core.m_blk_exp, 0))
+
+        # frame_sync (PS pulse before each frame): force a config reload so the
+        # transform direction tracks `inverse`, and realign the framing counters.
+        # Placed last so it overrides the normal counter updates this cycle; the PS
+        # asserts it while no data is in flight. The FFT IP is left untouched (no
+        # reset -> no reconfigure stall); it just receives a fresh config word.
+        with m.If(self.frame_sync):
+            m.d.sync += [configured.eq(0), row.eq(0), o_cnt.eq(0)]
         return m

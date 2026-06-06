@@ -61,6 +61,7 @@ class PhaseCorrelatorPL(wiring.Component):
             "fft_in":           In(Stream(complex_layout(mant_bits))),
             "fft_out":          Out(Stream(complex_layout(mant_bits))),
             "fft_inverse":      In(1),
+            "fft_frame_sync":   In(1),
             "fft_blk_exp_sum":  Out(unsigned(16)),
             # --- cross-power (pass 1) ---
             "xpower_f":         In(Stream(complex_layout(mant_bits))),
@@ -98,6 +99,7 @@ class PhaseCorrelatorPL(wiring.Component):
 
         m.d.comb += [
             fft.inverse.eq(self.fft_inverse),
+            fft.frame_sync.eq(self.fft_frame_sync),
             self.fft_blk_exp_sum.eq(fft.o_blk_exp_sum),
             rescale.sh.eq(self.rescale_sh),
             self.xpower_max.eq(cross.o_max),
