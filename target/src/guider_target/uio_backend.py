@@ -70,6 +70,17 @@ class MmReg:
         struct.pack_into("<I", self.m, off, val & 0xFFFFFFFF)
 
 
+def _available_udmabufs():
+    """Enumerate the u-dma-buf instances the running kernel actually exposes.
+
+    The board's overlay creates udmabuf0..N (currently 0..6); the count is not
+    fixed, so discover it from sysfs and sort numerically rather than assuming 8.
+    """
+    base = "/sys/class/u-dma-buf"
+    names = [n for n in os.listdir(base) if n.startswith("udmabuf")]
+    return sorted(names, key=lambda n: int(n[len("udmabuf"):]))
+
+
 class UdmaBuf:
     """ikwzm u-dma-buf: contiguous DDR buffer, mmap'd, with explicit cache sync."""
 
@@ -228,7 +239,10 @@ class UioBackend(PLBackend):
         self.dma1 = MmReg(DMA1_BASE)
         self.sw_in = AxisSwitch(MmReg(SWIN_BASE))
         self.sw_out = AxisSwitch(MmReg(SWOUT_BASE))
-        names = bufs or ["udmabuf%d" % i for i in range(8)]
+        names = bufs or _available_udmabufs()
+        if len(names) < 3:
+            raise RuntimeError("need >=3 u-dma-buf buffers, found %d: %r"
+                               % (len(names), names))
         self.buf = [UdmaBuf(n) for n in names]
 
     # Constant value the AXI switch outputs during/after soft-reset (from the IP's
@@ -268,13 +282,30 @@ class UioBackend(PLBackend):
                 raise TimeoutError("S2MM timeout SR=0x%08x" %
                                    self.dma0.rd(S2MM_SR))
         all_re, all_im = bR.read_complex(inb, inb, n + OVERHEAD, offset_beats=0)
+        # Skip the switch's init-state prefix.  Its length AND value are not
+        # deterministic across runs (depends on the preceding pass's drain state):
+        # the SRL emits either _STALE_INIT beats or all-zero beats before real
+        # data starts.  Both are init artifacts; a real conj(F)*G beat is never
+        # exactly 0+0i for non-degenerate input, so skip leading _STALE_INIT-or-
+        # zero beats.
         off = 0
-        while off < OVERHEAD and int(all_re[off]) == self._STALE_INIT:
+        while off < OVERHEAD and (int(all_re[off]) == self._STALE_INIT
+                                  or (int(all_re[off]) == 0
+                                      and int(all_im[off]) == 0)):
             off += 1
         r_re = all_re[off:off + n]
         r_im = all_im[off:off + n]
-        block_max = self.csr.rd(CSR_XPMAX_LO) | (self.csr.rd(CSR_XPMAX_HI) << 32)
-        return r_re.reshape(f_re.shape), r_im.reshape(f_re.shape), int(block_max)
+        # Block max for the BFP rescale shift.  The HW BlockMax latch (CSR XPMAX,
+        # gated by o_max_valid = fire & f.last) is unusable in this bitstream: the
+        # c_sg_length_width=26 MM2S re-arms after TLAST, so the F-input TLAST lands
+        # on a post-frame re-arm beat instead of beat n-1, and o_max_valid never
+        # coincides with real data (XPMAX reads 0, STATUS.xpower_done stays 0).
+        # R is bit-exact and already read back, so recompute the identical
+        # max(|re|,|im|) here.  Proper HW fix = self-count the frame length in
+        # CrossPower (like FftPass) rather than passing through the DMA TLAST;
+        # deferred to the next bitstream.
+        block_max = int(max(np.abs(r_re).max(), np.abs(r_im).max()))
+        return r_re.reshape(f_re.shape), r_im.reshape(f_re.shape), block_max
 
     # ---- window pass: samples * coefs >> window_bits -> windowed output ----
     def window(self, samples, coefs):
