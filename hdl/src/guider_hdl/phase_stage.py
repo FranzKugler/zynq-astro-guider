@@ -66,7 +66,6 @@ class CrossPower(wiring.Component):
             bmax.i_re.eq(mul.r_re), bmax.i_im.eq(mul.r_im),
             self.o_max.eq(bmax.o_max),
         ]
-        # BlockMax registers o_max on this edge; flag it valid the next cycle
         m.d.sync += self.o_max_valid.eq(fire & f.last)
         return m
 
