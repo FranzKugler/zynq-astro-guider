@@ -32,6 +32,7 @@ REG_WIN = 0x10000
 CSR_CTRL, CSR_STATUS, CSR_XPMAX_LO = 0x00, 0x04, 0x08
 CSR_XPMAX_HI, CSR_BLKEXP, CSR_ID = 0x0C, 0x10, 0x14
 CSR_ID_MAGIC = 0x47445231
+CTRL_DPATH_RESET = 1 << 6      # CTRL[6]: hold kernels + AXIS switches in reset
 
 # AXI DMA (direct register mode)
 MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN = 0x00, 0x04, 0x18, 0x28
@@ -245,6 +246,18 @@ class UioBackend(PLBackend):
                                % (len(names), names))
         self.buf = [UdmaBuf(n) for n in names]
 
+    def _frame_reset(self, ctrl=0):
+        """Pulse CTRL.dpath_reset to flush the AXIS switches' stale-beat prefix and
+        resync the kernel datapath (esp. FftPass row framing) before a frame.
+
+        `ctrl` carries the config bits (fft_inverse / rescale_sh) so they are set
+        while the reset is asserted; on deassert the kernels reconfigure from them.
+        The switch routing is cleared by this reset, so callers must (re-)route
+        AFTER this returns.
+        """
+        self.csr.wr(CSR_CTRL, ctrl | CTRL_DPATH_RESET)   # assert reset, set config
+        self.csr.wr(CSR_CTRL, ctrl)                       # deassert; config held
+
     # Constant value the AXI switch outputs during/after soft-reset (from the IP's
     # internal SRL initial state).  All stale prefix beats carry this value; the
     # first valid beat never equals it for any real cross-power input.
@@ -256,11 +269,11 @@ class UioBackend(PLBackend):
         n = f_re.size
         mant, inb = cfg.mant_bits, 2 * cfg.mant_bits + 1
         bF, bG, bR = self.buf[0], self.buf[1], self.buf[2]
-        # Reset DMAs first to stop any re-armed MM2S, then soft-reset both switches
-        # to flush their FIFOs (eliminates the stale-beat prefix from the
-        # c_sg_length_width=26 re-arm and PL initialisation state).
+        # Reset DMAs, then pulse the datapath reset to flush the AXIS switches'
+        # stale-beat prefix (the old AxisSwitch.soft_reset was a no-op) and resync
+        # the kernels before the frame.
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self.sw_in.soft_reset(); self.sw_out.soft_reset()
+        self._frame_reset()
         bF.write_complex(f_re.ravel(), f_im.ravel(), mant, mant)
         bG.write_complex(g_re.ravel(), g_im.ravel(), mant, mant)
         self.sw_in.route({M_XP_F: S_DMA0, M_XP_G: S_DMA1}, 6)
@@ -313,7 +326,7 @@ class UioBackend(PLBackend):
         n = samples.size
         bS, bC, bO = self.buf[0], self.buf[1], self.buf[2]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self.sw_in.soft_reset(); self.sw_out.soft_reset()
+        self._frame_reset()
         _write_scalar(bS, samples.ravel().astype(np.int64), cfg.input_bits)
         _write_scalar(bC, coefs.ravel().astype(np.int64), cfg.window_bits + 1)
         self.sw_in.route({M_WIN_SAMPLE: S_DMA0, M_WIN_COEF: S_DMA1}, 6)
@@ -340,9 +353,7 @@ class UioBackend(PLBackend):
         n = re.size
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self.sw_in.soft_reset(); self.sw_out.soft_reset()
-        ctrl = (1 if inverse else 0)
-        self.csr.wr(CSR_CTRL, ctrl)
+        self._frame_reset(1 if inverse else 0)   # also loads fft_inverse into CTRL
         bI.write_complex(re.ravel().astype(np.int64),
                          im.ravel().astype(np.int64),
                          cfg.mant_bits, cfg.mant_bits)
@@ -374,8 +385,7 @@ class UioBackend(PLBackend):
         out_bits = cfg.unit_bits + 2              # W_P / 2 = 17
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self.sw_in.soft_reset(); self.sw_out.soft_reset()
-        self.csr.wr(CSR_CTRL, (int(sh) & 0x1F) << 1)
+        self._frame_reset((int(sh) & 0x1F) << 1)   # also loads rescale_sh into CTRL
         bI.write_complex(r_re.ravel().astype(np.int64),
                          r_im.ravel().astype(np.int64),
                          in_bits, in_bits)

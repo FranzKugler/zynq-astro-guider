@@ -6,6 +6,9 @@ slave (the PS's control plane) plus the AXIS data ports. This is the register ma
 
 Register map (byte offset, 32-bit words):
   0x00 CTRL      RW  [0] fft_inverse           [5:1] rescale_sh
+                     [6] dpath_reset (level: hold the kernels + AXIS switches in
+                         reset; the PS pulses this before each frame to flush the
+                         switch's stale-beat prefix and resync FftPass framing)
   0x04 STATUS    R   [0] xpower_done (sticky)  [1] fft_done (sticky)
                  W   write-1-to-clear those sticky bits
   0x08 XPMAX_LO  R   xpower_max[31:0]   (latched on xpower_max_valid)
@@ -59,6 +62,7 @@ class PhaseCorrelatorCsr(wiring.Component):
             # control outputs -> PhaseCorrelatorPL
             "o_fft_inverse":      Out(1),
             "o_rescale_sh":       Out(sh_bits),
+            "o_dpath_reset":      Out(1),
             # status inputs <- PhaseCorrelatorPL
             "i_xpower_max":       In(max_bits),
             "i_xpower_max_valid": In(1),
@@ -72,12 +76,14 @@ class PhaseCorrelatorCsr(wiring.Component):
 
         fft_inverse = Signal()
         rescale_sh = Signal(self.sh_bits)
+        dpath_reset = Signal()
         xpower_done = Signal()
         fft_done = Signal()
         xpmax = Signal(self.max_bits)
         blkexp = Signal(self.blk_bits)
         m.d.comb += [self.o_fft_inverse.eq(fft_inverse),
-                     self.o_rescale_sh.eq(rescale_sh)]
+                     self.o_rescale_sh.eq(rescale_sh),
+                     self.o_dpath_reset.eq(dpath_reset)]
 
         # --- status capture (one-cycle strobes -> latched value + sticky flag) ---
         with m.If(self.i_xpower_max_valid):
@@ -101,7 +107,8 @@ class PhaseCorrelatorCsr(wiring.Component):
                     with m.Switch(waddr[2:]):
                         with m.Case(0x00 >> 2):            # CTRL
                             m.d.sync += [fft_inverse.eq(ax.wdata[0]),
-                                         rescale_sh.eq(ax.wdata[1:1 + self.sh_bits])]
+                                         rescale_sh.eq(ax.wdata[1:1 + self.sh_bits]),
+                                         dpath_reset.eq(ax.wdata[6])]
                         with m.Case(0x04 >> 2):            # STATUS: W1C
                             with m.If(ax.wdata[0]):
                                 m.d.sync += xpower_done.eq(0)
@@ -118,7 +125,7 @@ class PhaseCorrelatorCsr(wiring.Component):
         rdata = Signal(32)
         with m.Switch(raddr[2:]):
             with m.Case(0x00 >> 2):
-                m.d.comb += rdata.eq(Cat(fft_inverse, rescale_sh))
+                m.d.comb += rdata.eq(Cat(fft_inverse, rescale_sh, dpath_reset))
             with m.Case(0x04 >> 2):
                 m.d.comb += rdata.eq(Cat(xpower_done, fft_done))
             with m.Case(0x08 >> 2):
@@ -165,7 +172,8 @@ class PhaseCorrelatorTop(wiring.Component):
             sh_bits=(self._pl._rescale.max_sh).bit_length(),
             max_bits=self._pl._cross.in_bits, blk_bits=16)
         members = self._pl.signature.members
-        sig = {"s_axil": In(AXILite())}
+        sig = {"s_axil": In(AXILite()),
+               "o_dpath_reset": Out(1)}
         for name in self._INPUTS:
             sig[name] = In(AXIStream(members[name].signature.payload_shape))
         for name in self._OUTPUTS:
@@ -174,14 +182,24 @@ class PhaseCorrelatorTop(wiring.Component):
 
     def elaborate(self, platform):
         m = Module()
-        m.submodules.pl = pl = self._pl
         m.submodules.csr = csr = self._csr
         connect(m, flipped(self.s_axil), csr.s_axil)
+
+        # The PS pulses CTRL.dpath_reset before each frame: it resets the whole
+        # kernel datapath (FftPass row counter, FFT IP, FirstGens) AND -- via the
+        # wrapper's dpath_aresetn -- the AXIS switches, flushing the switch's
+        # stale-beat prefix so the FFT input frames deterministically.  The CSR
+        # itself is OUTSIDE this reset, so it holds the reset bit and the config.
+        dpath_reset = Signal()
+        m.d.comb += [dpath_reset.eq(csr.o_dpath_reset),
+                     self.o_dpath_reset.eq(csr.o_dpath_reset)]
+        m.submodules.pl = ResetInserter(dpath_reset)(self._pl)
+        pl = self._pl
 
         members = self._pl.signature.members
         for name in self._INPUTS:                    # AXIS-native -> FIRST -> kernel
             fg = FirstGen(members[name].signature.payload_shape)
-            m.submodules["fg_" + name] = fg
+            m.submodules["fg_" + name] = ResetInserter(dpath_reset)(fg)
             connect(m, flipped(getattr(self, name)), fg.ext)
             connect(m, fg.int, getattr(pl, name))
         for name in self._OUTPUTS:                    # kernel -> AXIS-native (drop FIRST)

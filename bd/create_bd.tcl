@@ -196,10 +196,16 @@ foreach p {pc/aclk dma0/s_axi_lite_aclk dma0/m_axi_mm2s_aclk dma0/m_axi_s2mm_acl
     connect_bd_net $fclk [get_bd_pins $p]
 }
 foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
-           sw_in/aresetn sw_in/s_axi_ctrl_aresetn sw_out/aresetn sw_out/s_axi_ctrl_aresetn \
+           sw_in/s_axi_ctrl_aresetn sw_out/s_axi_ctrl_aresetn \
            smc_ctrl/aresetn smc_mem/aresetn} {
     connect_bd_net $arstn [get_bd_pins $p]
 }
+# The AXIS switches' DATA-path reset is driven by pc/dpath_aresetn (= aresetn
+# gated by CTRL.dpath_reset), so the PS can flush the switch's stale-beat prefix
+# per frame. Their control-plane (s_axi_ctrl_aresetn) stays on the global reset
+# so routing writes still work while the data path is flushed.
+connect_bd_net [get_bd_pins pc/dpath_aresetn] \
+    [get_bd_pins sw_in/aresetn] [get_bd_pins sw_out/aresetn]
 
 assign_bd_address
 
