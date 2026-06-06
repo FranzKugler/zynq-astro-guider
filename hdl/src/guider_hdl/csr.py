@@ -182,24 +182,22 @@ class PhaseCorrelatorTop(wiring.Component):
 
     def elaborate(self, platform):
         m = Module()
+        m.submodules.pl = pl = self._pl
         m.submodules.csr = csr = self._csr
         connect(m, flipped(self.s_axil), csr.s_axil)
 
-        # The PS pulses CTRL.dpath_reset before each frame: it resets the whole
-        # kernel datapath (FftPass row counter, FFT IP, FirstGens) AND -- via the
-        # wrapper's dpath_aresetn -- the AXIS switches, flushing the switch's
-        # stale-beat prefix so the FFT input frames deterministically.  The CSR
-        # itself is OUTSIDE this reset, so it holds the reset bit and the config.
-        dpath_reset = Signal()
-        m.d.comb += [dpath_reset.eq(csr.o_dpath_reset),
-                     self.o_dpath_reset.eq(csr.o_dpath_reset)]
-        m.submodules.pl = ResetInserter(dpath_reset)(self._pl)
-        pl = self._pl
+        # The PS pulses CTRL.dpath_reset before each frame; the wrapper exposes it
+        # to the BD, where a proc_sys_reset turns it into a SYNCHRONOUS reset of
+        # the AXIS switches' data path, flushing the switch's stale-beat prefix.
+        # That alone keeps FftPass's free-running row counter aligned (frames are
+        # exact N*N multiples), so the kernels themselves need no reset -- and the
+        # FFT IP is NOT reset, avoiding a per-frame reconfigure.
+        m.d.comb += self.o_dpath_reset.eq(csr.o_dpath_reset)
 
         members = self._pl.signature.members
         for name in self._INPUTS:                    # AXIS-native -> FIRST -> kernel
             fg = FirstGen(members[name].signature.payload_shape)
-            m.submodules["fg_" + name] = ResetInserter(dpath_reset)(fg)
+            m.submodules["fg_" + name] = fg
             connect(m, flipped(getattr(self, name)), fg.ext)
             connect(m, fg.int, getattr(pl, name))
         for name in self._OUTPUTS:                    # kernel -> AXIS-native (drop FIRST)

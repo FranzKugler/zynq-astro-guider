@@ -25,12 +25,14 @@ module phase_correlator_axi #(
     (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
     input  wire                     aresetn,
 
-    // Datapath reset for the AXIS switches: aresetn gated by CTRL.dpath_reset, so
-    // the PS can flush the switches' stale-beat prefix per frame. Drive the
-    // switches' (data-path) aresetn from this; keep their s_axi_ctrl_aresetn and
-    // the DMAs/CSR on the global aresetn. Active-low. Plain output (connected as a
-    // net in the BD), no interface inference.
-    output wire                     dpath_aresetn,
+    // CTRL.dpath_reset (active-HIGH): the PS pulses this to flush the AXIS
+    // switches per frame. In the BD it feeds a proc_sys_reset (mb_debug_sys_rst),
+    // which produces a SYNCHRONOUS, stretched reset for the switches' data path.
+    // Declared active-high so it matches mb_debug_sys_rst (else BD infers
+    // ACTIVE_LOW from the name -> polarity mismatch).
+    (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 dpath_reset RST" *)
+    (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
+    output wire                     dpath_reset,
 
     // ---- AXI4-Lite control/status (S_AXI_LITE) ----
     input  wire [7:0]               s_axi_lite_awaddr,
@@ -113,14 +115,11 @@ module phase_correlator_axi #(
     localparam W_P          = 34;   // complex unit_bits+2
 
     wire rst = ~aresetn;
-    wire core_dpath_reset;
-    // active-high datapath reset from CTRL.dpath_reset, OR'd with the global reset
-    assign dpath_aresetn = aresetn & ~core_dpath_reset;
 
     phase_correlator_top u_core (
         .clk (aclk),
         .rst (rst),
-        .o_dpath_reset (core_dpath_reset),
+        .o_dpath_reset (dpath_reset),
 
         // AXI-Lite (subordinate)
         .s_axil__awaddr  (s_axi_lite_awaddr),

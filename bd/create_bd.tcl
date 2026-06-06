@@ -200,11 +200,17 @@ foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
            smc_ctrl/aresetn smc_mem/aresetn} {
     connect_bd_net $arstn [get_bd_pins $p]
 }
-# The AXIS switches' DATA-path reset is driven by pc/dpath_aresetn (= aresetn
-# gated by CTRL.dpath_reset), so the PS can flush the switch's stale-beat prefix
-# per frame. Their control-plane (s_axi_ctrl_aresetn) stays on the global reset
-# so routing writes still work while the data path is flushed.
-connect_bd_net [get_bd_pins pc/dpath_aresetn] \
+# The AXIS switches' DATA-path reset comes from a dedicated proc_sys_reset driven
+# by CTRL.dpath_reset (pc/dpath_reset, active-high -> mb_debug_sys_rst), so the PS
+# can flush the switch's stale-beat prefix per frame with a SYNCHRONOUS, stretched
+# reset (a bare combinational gate would be an async reset -- BD 41-1347). It also
+# resets on the global FCLK_RESET0_N. Their control-plane (s_axi_ctrl_aresetn)
+# stays on the global reset so routing writes work while the data path is flushed.
+set rst_dpath [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset rst_dpath]
+connect_bd_net $fclk [get_bd_pins rst_dpath/slowest_sync_clk]
+connect_bd_net [get_bd_pins ps7/FCLK_RESET0_N] [get_bd_pins rst_dpath/ext_reset_in]
+connect_bd_net [get_bd_pins pc/dpath_reset] [get_bd_pins rst_dpath/mb_debug_sys_rst]
+connect_bd_net [get_bd_pins rst_dpath/peripheral_aresetn] \
     [get_bd_pins sw_in/aresetn] [get_bd_pins sw_out/aresetn]
 
 assign_bd_address
