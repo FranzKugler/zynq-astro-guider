@@ -49,14 +49,28 @@ class FftPass(wiring.Component):
         m.submodules.core = core = self.core
         n, inp, out = self.n, self.inp, self.out
 
-        # --- config: load the direction once (bit0: 1=forward, 0=inverse) ---
+        # --- config: send the direction word once per direction change.
+        # `configured` gates data; `inverse_last` tracks what direction the IP
+        # was last given so we resend only when fft_inverse actually changes.
+        # We do NOT reset configured inside frame_sync: the FFT IP deasserts
+        # s_cfg_tready after accepting the config word and only reasserts it
+        # after the full frame output.  Clearing configured while s_cfg_tready
+        # is 0 causes a permanent deadlock (configured can never become 1).
         configured = Signal()
+        inverse_last = Signal()
         m.d.comb += [
             core.s_cfg_tdata.eq(Cat(~self.inverse, C(0, 7))),
             core.s_cfg_tvalid.eq(~configured),
         ]
+        # Direction changed since the last accepted config -> force reload.
+        # Fires on the cycle inverse changes; the PS only changes inverse between
+        # frames (after the previous DMA's IOC), so s_cfg_tready is 1 by then.
+        with m.If(self.inverse != inverse_last):
+            m.d.sync += configured.eq(0)
+        # Handshake: record the direction that was accepted (last-wins in Amaranth,
+        # so this overrides the direction-change clear on the same cycle).
         with m.If(core.s_cfg_tvalid & core.s_cfg_tready):
-            m.d.sync += configured.eq(1)
+            m.d.sync += [configured.eq(1), inverse_last.eq(self.inverse)]
 
         # --- input: gate on configured; assert tlast every N samples (row end) ---
         row = Signal(range(n))
@@ -95,11 +109,11 @@ class FftPass(wiring.Component):
         m.d.comb += self.o_blk_exp_sum.eq(
             exp_sum + Mux(row_end, core.m_blk_exp, 0))
 
-        # frame_sync (PS pulse before each frame): force a config reload so the
-        # transform direction tracks `inverse`, and realign the framing counters.
-        # Placed last so it overrides the normal counter updates this cycle; the PS
-        # asserts it while no data is in flight. The FFT IP is left untouched (no
-        # reset -> no reconfigure stall); it just receives a fresh config word.
+        # frame_sync (PS pulse before each frame): realign the framing counters.
+        # Does NOT clear `configured` -- the FFT IP deasserts s_cfg_tready after
+        # accepting a config word and only reasserts after a full frame completes;
+        # clearing configured while s_cfg_tready=0 creates a permanent deadlock.
+        # Direction reloads are handled via the inverse_last comparison above.
         with m.If(self.frame_sync):
-            m.d.sync += [configured.eq(0), row.eq(0), o_cnt.eq(0)]
+            m.d.sync += [row.eq(0), o_cnt.eq(0)]
         return m

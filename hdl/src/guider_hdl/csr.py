@@ -6,9 +6,8 @@ slave (the PS's control plane) plus the AXIS data ports. This is the register ma
 
 Register map (byte offset, 32-bit words):
   0x00 CTRL      RW  [0] fft_inverse           [5:1] rescale_sh
-                     [6] dpath_reset (level: hold the kernels + AXIS switches in
-                         reset; the PS pulses this before each frame to flush the
-                         switch's stale-beat prefix and resync FftPass framing)
+                     [6] dpath_reset (level: flush AXIS switches via rst_dpath +
+                         resync FftPass row/o_cnt; PS pulses before each frame)
   0x04 STATUS    R   [0] xpower_done (sticky)  [1] fft_done (sticky)
                  W   write-1-to-clear those sticky bits
   0x08 XPMAX_LO  R   xpower_max[31:0]   (latched on xpower_max_valid)
@@ -189,9 +188,9 @@ class PhaseCorrelatorTop(wiring.Component):
         # The PS pulses CTRL.dpath_reset before each frame; the wrapper exposes it
         # to the BD, where a proc_sys_reset turns it into a SYNCHRONOUS reset of
         # the AXIS switches' data path, flushing the switch's stale-beat prefix.
-        # That alone keeps FftPass's free-running row counter aligned (frames are
-        # exact N*N multiples), so the kernels themselves need no reset -- and the
-        # FFT IP is NOT reset, avoiding a per-frame reconfigure.
+        # It also drives fft_frame_sync which resets FftPass's row/o_cnt counters.
+        # The FFT IP is NOT reset; direction reload is handled by inverse_last
+        # comparison inside FftPass (see fft_pass.py).
         m.d.comb += self.o_dpath_reset.eq(csr.o_dpath_reset)
 
         members = self._pl.signature.members
