@@ -63,8 +63,7 @@ class PhaseCorrelatorCsr(wiring.Component):
             "o_rescale_sh":       Out(sh_bits),
             "o_dpath_reset":      Out(1),
             # control outputs -> StaleAbsorber
-            "o_skip_n":           Out(4),
-            "o_skip_load":        Out(1),
+            "o_start_absorber":   Out(1),
             # status inputs <- PhaseCorrelatorPL
             "i_xpower_max":       In(max_bits),
             "i_xpower_max_valid": In(1),
@@ -79,18 +78,16 @@ class PhaseCorrelatorCsr(wiring.Component):
         fft_inverse = Signal()
         rescale_sh = Signal(self.sh_bits)
         dpath_reset = Signal()
-        skip_n = Signal(4)
-        skip_load = Signal()
+        start_absorber = Signal()
         xpower_done = Signal()
         fft_done = Signal()
         xpmax = Signal(self.max_bits)
         blkexp = Signal(self.blk_bits)
-        m.d.sync += skip_load.eq(0)   # default: deassert every cycle
+        m.d.sync += start_absorber.eq(0)   # default: deassert every cycle
         m.d.comb += [self.o_fft_inverse.eq(fft_inverse),
                      self.o_rescale_sh.eq(rescale_sh),
                      self.o_dpath_reset.eq(dpath_reset),
-                     self.o_skip_n.eq(skip_n),
-                     self.o_skip_load.eq(skip_load)]
+                     self.o_start_absorber.eq(start_absorber)]
 
         # --- status capture (one-cycle strobes -> latched value + sticky flag) ---
         with m.If(self.i_xpower_max_valid):
@@ -116,8 +113,7 @@ class PhaseCorrelatorCsr(wiring.Component):
                             m.d.sync += [fft_inverse.eq(ax.wdata[0]),
                                          rescale_sh.eq(ax.wdata[1:1 + self.sh_bits]),
                                          dpath_reset.eq(ax.wdata[6]),
-                                         skip_n.eq(ax.wdata[7:11]),
-                                         skip_load.eq(1)]  # 1-cycle load pulse
+                                         start_absorber.eq(ax.wdata[7])]  # 1-cycle arm pulse
                         with m.Case(0x04 >> 2):            # STATUS: W1C
                             with m.If(ax.wdata[0]):
                                 m.d.sync += xpower_done.eq(0)
@@ -134,7 +130,7 @@ class PhaseCorrelatorCsr(wiring.Component):
         rdata = Signal(32)
         with m.Switch(raddr[2:]):
             with m.Case(0x00 >> 2):
-                m.d.comb += rdata.eq(Cat(fft_inverse, rescale_sh, dpath_reset, skip_n))
+                m.d.comb += rdata.eq(Cat(fft_inverse, rescale_sh, dpath_reset))
             with m.Case(0x04 >> 2):
                 m.d.comb += rdata.eq(Cat(xpower_done, fft_done))
             with m.Case(0x08 >> 2):
@@ -183,8 +179,7 @@ class PhaseCorrelatorTop(wiring.Component):
         members = self._pl.signature.members
         sig = {"s_axil": In(AXILite()),
                "o_dpath_reset": Out(1),
-               "o_skip_n": Out(4),
-               "o_skip_load": Out(1)}
+               "o_start_absorber": Out(1)}
         for name in self._INPUTS:
             sig[name] = In(AXIStream(members[name].signature.payload_shape))
         for name in self._OUTPUTS:
@@ -204,8 +199,7 @@ class PhaseCorrelatorTop(wiring.Component):
         # The FFT IP is NOT reset; direction reload is handled by inverse_last
         # comparison inside FftPass (see fft_pass.py).
         m.d.comb += [self.o_dpath_reset.eq(csr.o_dpath_reset),
-                     self.o_skip_n.eq(csr.o_skip_n),
-                     self.o_skip_load.eq(csr.o_skip_load)]
+                     self.o_start_absorber.eq(csr.o_start_absorber)]
 
         members = self._pl.signature.members
         for name in self._INPUTS:                    # AXIS-native -> FIRST -> kernel

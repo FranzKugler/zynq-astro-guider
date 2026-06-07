@@ -32,8 +32,8 @@ REG_WIN = 0x10000
 CSR_CTRL, CSR_STATUS, CSR_XPMAX_LO = 0x00, 0x04, 0x08
 CSR_XPMAX_HI, CSR_BLKEXP, CSR_ID = 0x0C, 0x10, 0x14
 CSR_ID_MAGIC = 0x47445231
-CTRL_DPATH_RESET  = 1 << 6     # CTRL[6]: hold kernels + AXIS switches in reset
-CTRL_SKIP_N_SHIFT = 7          # CTRL[10:7]: absorber beat-skip count (4 bits)
+CTRL_DPATH_RESET    = 1 << 6   # CTRL[6]: hold kernels + AXIS switches in reset
+CTRL_START_ABSORBER = 1 << 7   # CTRL[7]: arm absorber (1-cycle pulse via CSR)
 
 # AXI DMA (direct register mode)
 MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN = 0x00, 0x04, 0x18, 0x28
@@ -167,28 +167,6 @@ def _read_scalar(buf, nbits, n_total, offset_beats=0):
     return vals, words[:, 1]
 
 
-def _raw_hi(buf, n_total, offset_beats=0):
-    """Return (lo_words, hi_words) of raw 64-bit halves for stale detection."""
-    buf.from_device()
-    start = offset_beats * WORD_BYTES
-    words = np.frombuffer(buf.m[start:start + n_total * WORD_BYTES],
-                          np.uint64).reshape(n_total, 2)
-    return words[:, 0], words[:, 1]
-
-
-def _stale_skip(hi_words, overhead):
-    """Return offset past stale prefix beats (upper 64 bits non-zero = stale).
-
-    Real kernel output always has TDATA[127:W] = 0 (zeroed by AXI wrapper),
-    so hi_words == 0 for valid beats.  Stale beats from the switch SRL init
-    state have non-zero upper bits.  Fallback: if no stale detected (off==0)
-    just use offset 0 (no prefix to skip).
-    """
-    off = 0
-    while off < overhead and hi_words[off] != 0:
-        off += 1
-    return off
-
 
 def _dma_reset(reg):
     """Soft-reset the whole AXI DMA core (clears stale state incl. sticky IOC)."""
@@ -213,15 +191,6 @@ def _dma_wait(reg, sr, timeout=5.0, what=""):
             raise TimeoutError("DMA %s timeout, SR=0x%08x" % (what, reg.rd(sr)))
 
 
-def _skip_n(last_slave, cur_slave):
-    """Stale-prefix beat count for the StaleAbsorber.
-
-    Same-slave sw_out transition: 2 beats; different-slave: 4 beats; first call
-    (last_slave=None, SRL cleared by FCLK_RESET0_N at boot): 0 beats.
-    """
-    if last_slave is None:
-        return 0
-    return 2 if last_slave == cur_slave else 4
 
 
 class AxisSwitch:
@@ -257,27 +226,23 @@ class UioBackend(PLBackend):
             raise RuntimeError("need >=3 u-dma-buf buffers, found %d: %r"
                                % (len(names), names))
         self.buf = [UdmaBuf(n) for n in names]
-        self._last_out_slave = None   # tracks previous sw_out slave for skip_n
+        self._last_out_slave = None   # None = first call after boot (no absorber arm)
 
-    def _frame_reset(self, ctrl=0, skip_n=0):
+    def _frame_reset(self, ctrl=0, arm_absorber=False):
         """Pulse CTRL.dpath_reset to flush the AXIS switches and resync kernels.
 
-        `ctrl` carries the config bits (fft_inverse / rescale_sh).  `skip_n` is
-        written to CTRL[10:7]; the StaleAbsorber latches it one clock later (the
-        CSR registers it on the first write, then generates o_skip_load on the
-        second cycle).  Same-slave sw_out transitions: skip_n=2; different-slave:
-        skip_n=4; first call after boot: skip_n=0 (SRL cleared by FCLK_RESET0_N).
-        The switch routing is cleared by dpath_reset, so callers must (re-)route
-        AFTER this returns.
+        `ctrl` carries the config bits (fft_inverse / rescale_sh).
+        If `arm_absorber` is True, CTRL[7] is set in both writes, generating a
+        1-cycle o_start_absorber pulse from the CSR one clock after the write.
+        The absorber then drains the AXIS switch SRL stale prefix (previous
+        frame tail, ending with TLAST) before the DMA sees the new frame.
+        arm_absorber=False for the first call after boot (SRL is zero, no
+        stale prefix).  The switch routing is cleared by dpath_reset, so
+        callers must (re-)route AFTER this returns.
         """
-        ctrl_val = ctrl | ((int(skip_n) & 0xF) << CTRL_SKIP_N_SHIFT)
-        self.csr.wr(CSR_CTRL, ctrl_val | CTRL_DPATH_RESET)   # assert reset + load skip_n
-        self.csr.wr(CSR_CTRL, ctrl_val)                       # deassert reset; skip_n held
-
-    # Value the AXI switch outputs on the very first frame after bitstream load
-    # (from the IP's internal SRL initial state baked into the bitstream).
-    # Not used for stale detection any more; retained for documentation.
-    _STALE_INIT = 7276303945
+        arm = CTRL_START_ABSORBER if arm_absorber else 0
+        self.csr.wr(CSR_CTRL, ctrl | arm | CTRL_DPATH_RESET)  # assert reset, arm absorber
+        self.csr.wr(CSR_CTRL, ctrl | arm)                      # deassert reset
 
     # ---- cross-power: F,G -> R = conj(F)*G, + block max (pass 1) ----
     def cross_power(self, f_re, f_im, g_re, g_im):
@@ -286,7 +251,7 @@ class UioBackend(PLBackend):
         mant, inb = cfg.mant_bits, 2 * cfg.mant_bits + 1
         bF, bG, bR = self.buf[0], self.buf[1], self.buf[2]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset(skip_n=_skip_n(self._last_out_slave, O_XP_R))
+        self._frame_reset(arm_absorber=(self._last_out_slave is not None))
         bF.write_complex(f_re.ravel(), f_im.ravel(), mant, mant)
         bG.write_complex(g_re.ravel(), g_im.ravel(), mant, mant)
         self.sw_in.route({M_XP_F: S_DMA0, M_XP_G: S_DMA1}, 6)
@@ -312,7 +277,7 @@ class UioBackend(PLBackend):
         n = samples.size
         bS, bC, bO = self.buf[0], self.buf[1], self.buf[2]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset(skip_n=_skip_n(self._last_out_slave, O_WIN))
+        self._frame_reset(arm_absorber=(self._last_out_slave is not None))
         _write_scalar(bS, samples.ravel().astype(np.int64), cfg.input_bits)
         _write_scalar(bC, coefs.ravel().astype(np.int64), cfg.window_bits + 1)
         self.sw_in.route({M_WIN_SAMPLE: S_DMA0, M_WIN_COEF: S_DMA1}, 6)
@@ -337,7 +302,7 @@ class UioBackend(PLBackend):
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
         ctrl = 1 if inverse else 0   # CTRL[0] = fft_inverse
-        self._frame_reset(ctrl, skip_n=_skip_n(self._last_out_slave, O_FFT))
+        self._frame_reset(ctrl, arm_absorber=(self._last_out_slave is not None))
         bI.write_complex(re.ravel().astype(np.int64),
                          im.ravel().astype(np.int64),
                          cfg.mant_bits, cfg.mant_bits)
@@ -364,7 +329,7 @@ class UioBackend(PLBackend):
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
         ctrl = (int(sh) & 0x1F) << 1              # CTRL[5:1] = rescale_sh
-        self._frame_reset(ctrl, skip_n=_skip_n(self._last_out_slave, O_RESC_P))
+        self._frame_reset(ctrl, arm_absorber=(self._last_out_slave is not None))
         bI.write_complex(r_re.ravel().astype(np.int64),
                          r_im.ravel().astype(np.int64),
                          in_bits, in_bits)

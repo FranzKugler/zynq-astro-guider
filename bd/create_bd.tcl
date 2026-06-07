@@ -223,9 +223,8 @@ connect_bd_net [get_bd_pins pc/dpath_reset] [get_bd_pins rst_dpath/mb_debug_sys_
 connect_bd_net [get_bd_pins rst_dpath/peripheral_aresetn] \
     [get_bd_pins sw_in/aresetn] [get_bd_pins sw_out/aresetn]
 
-# CSR -> absorber skip control
-connect_bd_net [get_bd_pins pc/o_skip_n]    [get_bd_pins absorber/skip_n]
-connect_bd_net [get_bd_pins pc/o_skip_load] [get_bd_pins absorber/load]
+# CSR -> absorber arm pulse
+connect_bd_net [get_bd_pins pc/o_start_absorber] [get_bd_pins absorber/start]
 
 assign_bd_address
 
