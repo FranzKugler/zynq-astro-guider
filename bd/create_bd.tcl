@@ -27,8 +27,9 @@ set PART     xc7z020clg400-1
 set DESIGN   phase_corr
 set ROOT     [file normalize [file dirname [info script]]/..]
 set PROJDIR  $ROOT/hdl/build/vivado_bd
-set RTL_TOP  $ROOT/hdl/build/rtl/phase_correlator_top.v
-set RTL_WRAP $ROOT/bd/phase_correlator_axi.v
+set RTL_TOP     $ROOT/hdl/build/rtl/phase_correlator_top.v
+set RTL_WRAP    $ROOT/bd/phase_correlator_axi.v
+set RTL_ABSORB  $ROOT/bd/stale_absorber.v
 set TDATA_BYTES 16                                   ;# 128-bit uniform AXIS
 
 if {![file exists $RTL_TOP]} {
@@ -38,8 +39,8 @@ if {![file exists $RTL_TOP]} {
 file mkdir $PROJDIR
 create_project -force ${DESIGN} $PROJDIR -part $PART
 
-# --- the Amaranth top + the AXI rename wrapper as RTL sources ---
-add_files -norecurse [list $RTL_TOP $RTL_WRAP]
+# --- the Amaranth top + the AXI rename wrapper + the stale absorber as RTL sources ---
+add_files -norecurse [list $RTL_TOP $RTL_WRAP $RTL_ABSORB]
 
 # --- the Xilinx FFT IP the top instantiates as the black box fft_<N> ---
 # Only needed for synthesis (MODE=all): validate_bd treats fft_<N> as an
@@ -186,18 +187,27 @@ foreach k $sw_out_src {
         [get_bd_intf_pins sw_out/S0${i}_AXIS]
     incr i
 }
-connect_bd_intf_net [get_bd_intf_pins sw_out/M00_AXIS] [get_bd_intf_pins dma0/S_AXIS_S2MM]
+# --- stale absorber between sw_out M00_AXIS and dma0 S_AXIS_S2MM ---
+# The AXIS switch SRL is not reset by aresetn; its tail content from the
+# previous frame appears as a 2-4 beat stale prefix on the next frame.
+# skip_n (from CSR CTRL[10:7]) is loaded one cycle after each CTRL write;
+# the absorber silently drains those beats before the DMA sees them.
+set absorber [create_bd_cell -type module -reference stale_absorber absorber]
+connect_bd_intf_net [get_bd_intf_pins sw_out/M00_AXIS]  [get_bd_intf_pins absorber/S_AXIS]
+connect_bd_intf_net [get_bd_intf_pins absorber/M_AXIS]  [get_bd_intf_pins dma0/S_AXIS_S2MM]
 
 # --- clocks + resets to everything ---
 foreach p {pc/aclk dma0/s_axi_lite_aclk dma0/m_axi_mm2s_aclk dma0/m_axi_s2mm_aclk \
            dma1/s_axi_lite_aclk dma1/m_axi_mm2s_aclk \
            sw_in/aclk sw_in/s_axi_ctrl_aclk sw_out/aclk sw_out/s_axi_ctrl_aclk \
-           smc_ctrl/aclk smc_mem/aclk ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK} {
+           smc_ctrl/aclk smc_mem/aclk ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK \
+           absorber/aclk} {
     connect_bd_net $fclk [get_bd_pins $p]
 }
 foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
            sw_in/s_axi_ctrl_aresetn sw_out/s_axi_ctrl_aresetn \
-           smc_ctrl/aresetn smc_mem/aresetn} {
+           smc_ctrl/aresetn smc_mem/aresetn \
+           absorber/aresetn} {
     connect_bd_net $arstn [get_bd_pins $p]
 }
 # The AXIS switches' DATA-path reset comes from a dedicated proc_sys_reset driven
@@ -212,6 +222,10 @@ connect_bd_net [get_bd_pins ps7/FCLK_RESET0_N] [get_bd_pins rst_dpath/ext_reset_
 connect_bd_net [get_bd_pins pc/dpath_reset] [get_bd_pins rst_dpath/mb_debug_sys_rst]
 connect_bd_net [get_bd_pins rst_dpath/peripheral_aresetn] \
     [get_bd_pins sw_in/aresetn] [get_bd_pins sw_out/aresetn]
+
+# CSR -> absorber skip control
+connect_bd_net [get_bd_pins pc/o_skip_n]    [get_bd_pins absorber/skip_n]
+connect_bd_net [get_bd_pins pc/o_skip_load] [get_bd_pins absorber/load]
 
 assign_bd_address
 

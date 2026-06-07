@@ -32,7 +32,8 @@ REG_WIN = 0x10000
 CSR_CTRL, CSR_STATUS, CSR_XPMAX_LO = 0x00, 0x04, 0x08
 CSR_XPMAX_HI, CSR_BLKEXP, CSR_ID = 0x0C, 0x10, 0x14
 CSR_ID_MAGIC = 0x47445231
-CTRL_DPATH_RESET = 1 << 6      # CTRL[6]: hold kernels + AXIS switches in reset
+CTRL_DPATH_RESET  = 1 << 6     # CTRL[6]: hold kernels + AXIS switches in reset
+CTRL_SKIP_N_SHIFT = 7          # CTRL[10:7]: absorber beat-skip count (4 bits)
 
 # AXI DMA (direct register mode)
 MM2S_CR, MM2S_SR, MM2S_SA, MM2S_LEN = 0x00, 0x04, 0x18, 0x28
@@ -212,6 +213,17 @@ def _dma_wait(reg, sr, timeout=5.0, what=""):
             raise TimeoutError("DMA %s timeout, SR=0x%08x" % (what, reg.rd(sr)))
 
 
+def _skip_n(last_slave, cur_slave):
+    """Stale-prefix beat count for the StaleAbsorber.
+
+    Same-slave sw_out transition: 2 beats; different-slave: 4 beats; first call
+    (last_slave=None, SRL cleared by FCLK_RESET0_N at boot): 0 beats.
+    """
+    if last_slave is None:
+        return 0
+    return 2 if last_slave == cur_slave else 4
+
+
 class AxisSwitch:
     def __init__(self, reg):
         self.reg = reg
@@ -245,22 +257,26 @@ class UioBackend(PLBackend):
             raise RuntimeError("need >=3 u-dma-buf buffers, found %d: %r"
                                % (len(names), names))
         self.buf = [UdmaBuf(n) for n in names]
+        self._last_out_slave = None   # tracks previous sw_out slave for skip_n
 
-    def _frame_reset(self, ctrl=0):
-        """Pulse CTRL.dpath_reset to flush the AXIS switches' stale-beat prefix and
-        resync the kernel datapath (esp. FftPass row framing) before a frame.
+    def _frame_reset(self, ctrl=0, skip_n=0):
+        """Pulse CTRL.dpath_reset to flush the AXIS switches and resync kernels.
 
-        `ctrl` carries the config bits (fft_inverse / rescale_sh) so they are set
-        while the reset is asserted; on deassert the kernels reconfigure from them.
-        The switch routing is cleared by this reset, so callers must (re-)route
+        `ctrl` carries the config bits (fft_inverse / rescale_sh).  `skip_n` is
+        written to CTRL[10:7]; the StaleAbsorber latches it one clock later (the
+        CSR registers it on the first write, then generates o_skip_load on the
+        second cycle).  Same-slave sw_out transitions: skip_n=2; different-slave:
+        skip_n=4; first call after boot: skip_n=0 (SRL cleared by FCLK_RESET0_N).
+        The switch routing is cleared by dpath_reset, so callers must (re-)route
         AFTER this returns.
         """
-        self.csr.wr(CSR_CTRL, ctrl | CTRL_DPATH_RESET)   # assert reset, set config
-        self.csr.wr(CSR_CTRL, ctrl)                       # deassert; config held
+        ctrl_val = ctrl | ((int(skip_n) & 0xF) << CTRL_SKIP_N_SHIFT)
+        self.csr.wr(CSR_CTRL, ctrl_val | CTRL_DPATH_RESET)   # assert reset + load skip_n
+        self.csr.wr(CSR_CTRL, ctrl_val)                       # deassert reset; skip_n held
 
-    # Constant value the AXI switch outputs during/after soft-reset (from the IP's
-    # internal SRL initial state).  All stale prefix beats carry this value; the
-    # first valid beat never equals it for any real cross-power input.
+    # Value the AXI switch outputs on the very first frame after bitstream load
+    # (from the IP's internal SRL initial state baked into the bitstream).
+    # Not used for stale detection any more; retained for documentation.
     _STALE_INIT = 7276303945
 
     # ---- cross-power: F,G -> R = conj(F)*G, + block max (pass 1) ----
@@ -269,55 +285,25 @@ class UioBackend(PLBackend):
         n = f_re.size
         mant, inb = cfg.mant_bits, 2 * cfg.mant_bits + 1
         bF, bG, bR = self.buf[0], self.buf[1], self.buf[2]
-        # Reset DMAs, then pulse the datapath reset to flush the AXIS switches'
-        # stale-beat prefix (the old AxisSwitch.soft_reset was a no-op) and resync
-        # the kernels before the frame.
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset()
+        self._frame_reset(skip_n=_skip_n(self._last_out_slave, O_XP_R))
         bF.write_complex(f_re.ravel(), f_im.ravel(), mant, mant)
         bG.write_complex(g_re.ravel(), g_im.ravel(), mant, mant)
         self.sw_in.route({M_XP_F: S_DMA0, M_XP_G: S_DMA1}, 6)
         self.sw_out.route({0: O_XP_R}, 1)
         nb = n * WORD_BYTES
-        # Over-allocate S2MM by OVERHEAD beats to absorb the variable stale prefix
-        # (empirically 2 or 4 beats of _STALE_INIT from the switch).  After IOC we
-        # scan past the stale prefix to find where valid data starts.
-        # MM2S fires DMADecErr post-completion (RS sticky, c_sg_length_width=26);
-        # that is harmless -- S2MM IOC is the true completion signal.
-        OVERHEAD = 8
-        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bR.phys,
-                  (n + OVERHEAD) * WORD_BYTES)
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bR.phys, nb)
         _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bF.phys, nb)
         _dma_kick(self.dma1, MM2S_CR, MM2S_SA, MM2S_LEN, bG.phys, nb)
         t0 = time.time()
         while not (self.dma0.rd(S2MM_SR) & DMASR_IOC):
             if time.time() - t0 > 10.0:
-                raise TimeoutError("S2MM timeout SR=0x%08x" %
-                                   self.dma0.rd(S2MM_SR))
-        all_re, all_im = bR.read_complex(inb, inb, n + OVERHEAD, offset_beats=0)
-        # Skip the switch's init-state prefix.  Its length AND value are not
-        # deterministic across runs (depends on the preceding pass's drain state):
-        # the SRL emits either _STALE_INIT beats or all-zero beats before real
-        # data starts.  Both are init artifacts; a real conj(F)*G beat is never
-        # exactly 0+0i for non-degenerate input, so skip leading _STALE_INIT-or-
-        # zero beats.
-        off = 0
-        while off < OVERHEAD and (int(all_re[off]) == self._STALE_INIT
-                                  or (int(all_re[off]) == 0
-                                      and int(all_im[off]) == 0)):
-            off += 1
-        r_re = all_re[off:off + n]
-        r_im = all_im[off:off + n]
-        # Block max for the BFP rescale shift.  The HW BlockMax latch (CSR XPMAX,
-        # gated by o_max_valid = fire & f.last) is unusable in this bitstream: the
-        # c_sg_length_width=26 MM2S re-arms after TLAST, so the F-input TLAST lands
-        # on a post-frame re-arm beat instead of beat n-1, and o_max_valid never
-        # coincides with real data (XPMAX reads 0, STATUS.xpower_done stays 0).
-        # R is bit-exact and already read back, so recompute the identical
-        # max(|re|,|im|) here.  Proper HW fix = self-count the frame length in
-        # CrossPower (like FftPass) rather than passing through the DMA TLAST;
-        # deferred to the next bitstream.
+                raise TimeoutError("S2MM timeout SR=0x%08x" % self.dma0.rd(S2MM_SR))
+        r_re, r_im = bR.read_complex(inb, inb, n)
+        # Block max: recomputed from R since HW XPMAX is not reliable with the
+        # c_sg_length_width=26 MM2S (TLAST lands on a post-frame re-arm beat).
         block_max = int(max(np.abs(r_re).max(), np.abs(r_im).max()))
+        self._last_out_slave = O_XP_R
         return r_re.reshape(f_re.shape), r_im.reshape(f_re.shape), block_max
 
     # ---- window pass: samples * coefs >> window_bits -> windowed output ----
@@ -326,26 +312,23 @@ class UioBackend(PLBackend):
         n = samples.size
         bS, bC, bO = self.buf[0], self.buf[1], self.buf[2]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset()
+        self._frame_reset(skip_n=_skip_n(self._last_out_slave, O_WIN))
         _write_scalar(bS, samples.ravel().astype(np.int64), cfg.input_bits)
         _write_scalar(bC, coefs.ravel().astype(np.int64), cfg.window_bits + 1)
         self.sw_in.route({M_WIN_SAMPLE: S_DMA0, M_WIN_COEF: S_DMA1}, 6)
         self.sw_out.route({0: O_WIN}, 1)
         nb = n * WORD_BYTES
         W_OUT = cfg.input_bits + (cfg.window_bits + 1) - cfg.window_bits + 1  # =14
-        OVERHEAD = 8
-        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys,
-                  (n + OVERHEAD) * WORD_BYTES)
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys, nb)
         _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bS.phys, nb)
         _dma_kick(self.dma1, MM2S_CR, MM2S_SA, MM2S_LEN, bC.phys, nb)
         t0 = time.time()
         while not (self.dma0.rd(S2MM_SR) & DMASR_IOC):
             if time.time() - t0 > 10.0:
-                raise TimeoutError("window S2MM timeout SR=0x%08x" %
-                                   self.dma0.rd(S2MM_SR))
-        out, hi = _read_scalar(bO, W_OUT, n + OVERHEAD)
-        off = _stale_skip(hi, OVERHEAD)   # upper 64 bits are 0 for real data
-        return out[off:off + n].reshape(samples.shape)
+                raise TimeoutError("window S2MM timeout SR=0x%08x" % self.dma0.rd(S2MM_SR))
+        out, _ = _read_scalar(bO, W_OUT, n)
+        self._last_out_slave = O_WIN
+        return out.reshape(samples.shape)
 
     # ---- fft pass: N rows of N-point BFP FFT/IFFT along axis 1 ----
     def fft_pass(self, re, im, inverse):
@@ -353,29 +336,24 @@ class UioBackend(PLBackend):
         n = re.size
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset(1 if inverse else 0)   # also loads fft_inverse into CTRL
+        ctrl = 1 if inverse else 0   # CTRL[0] = fft_inverse
+        self._frame_reset(ctrl, skip_n=_skip_n(self._last_out_slave, O_FFT))
         bI.write_complex(re.ravel().astype(np.int64),
                          im.ravel().astype(np.int64),
                          cfg.mant_bits, cfg.mant_bits)
         self.sw_in.route({M_FFT_IN: S_DMA0}, 6)
         self.sw_out.route({0: O_FFT}, 1)
         nb = n * WORD_BYTES
-        OVERHEAD = 8
-        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys,
-                  (n + OVERHEAD) * WORD_BYTES)
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys, nb)
         _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bI.phys, nb)
         t0 = time.time()
         while not (self.dma0.rd(S2MM_SR) & DMASR_IOC):
             if time.time() - t0 > 10.0:
-                raise TimeoutError("fft S2MM timeout SR=0x%08x" %
-                                   self.dma0.rd(S2MM_SR))
-        re_raw, im_raw = bO.read_complex(cfg.mant_bits, cfg.mant_bits,
-                                         n + OVERHEAD, offset_beats=0)
-        _, hi = _raw_hi(bO, n + OVERHEAD)
-        off = _stale_skip(hi, OVERHEAD)
+                raise TimeoutError("fft S2MM timeout SR=0x%08x" % self.dma0.rd(S2MM_SR))
+        re_out, im_out = bO.read_complex(cfg.mant_bits, cfg.mant_bits, n)
         self.csr.wr(CSR_STATUS, 0x2)          # W1C fft_done
-        return (re_raw[off:off + n].reshape(re.shape),
-                im_raw[off:off + n].reshape(im.shape))
+        self._last_out_slave = O_FFT
+        return re_out.reshape(re.shape), im_out.reshape(im.shape)
 
     # ---- rescale + phase-only pass: R -> P (BFP rescale + phase normalise) ----
     def rescale_phase(self, r_re, r_im, sh):
@@ -385,25 +363,20 @@ class UioBackend(PLBackend):
         out_bits = cfg.unit_bits + 2              # W_P / 2 = 17
         bI, bO = self.buf[0], self.buf[1]
         _dma_reset(self.dma0); _dma_reset(self.dma1)
-        self._frame_reset((int(sh) & 0x1F) << 1)   # also loads rescale_sh into CTRL
+        ctrl = (int(sh) & 0x1F) << 1              # CTRL[5:1] = rescale_sh
+        self._frame_reset(ctrl, skip_n=_skip_n(self._last_out_slave, O_RESC_P))
         bI.write_complex(r_re.ravel().astype(np.int64),
                          r_im.ravel().astype(np.int64),
                          in_bits, in_bits)
         self.sw_in.route({M_RESC_R: S_DMA0}, 6)
         self.sw_out.route({0: O_RESC_P}, 1)
         nb = n * WORD_BYTES
-        OVERHEAD = 8
-        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys,
-                  (n + OVERHEAD) * WORD_BYTES)
+        _dma_kick(self.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys, nb)
         _dma_kick(self.dma0, MM2S_CR, MM2S_SA, MM2S_LEN, bI.phys, nb)
         t0 = time.time()
         while not (self.dma0.rd(S2MM_SR) & DMASR_IOC):
             if time.time() - t0 > 10.0:
-                raise TimeoutError("rescale S2MM timeout SR=0x%08x" %
-                                   self.dma0.rd(S2MM_SR))
-        re_raw, im_raw = bO.read_complex(out_bits, out_bits, n + OVERHEAD,
-                                         offset_beats=0)
-        _, hi = _raw_hi(bO, n + OVERHEAD)
-        off = _stale_skip(hi, OVERHEAD)
-        return (re_raw[off:off + n].reshape(r_re.shape),
-                im_raw[off:off + n].reshape(r_im.shape))
+                raise TimeoutError("rescale S2MM timeout SR=0x%08x" % self.dma0.rd(S2MM_SR))
+        re_out, im_out = bO.read_complex(out_bits, out_bits, n)
+        self._last_out_slave = O_RESC_P
+        return re_out.reshape(r_re.shape), im_out.reshape(r_im.shape)

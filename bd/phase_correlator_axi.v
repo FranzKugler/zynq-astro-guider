@@ -34,6 +34,12 @@ module phase_correlator_axi #(
     (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
     output wire                     dpath_reset,
 
+    // StaleAbsorber control: skip_n (CTRL[10:7]) and one-cycle load pulse.
+    // The absorber silently drains the AXIS switch SRL stale prefix before
+    // the DMA sees it.  skip_n is set per-frame by the PS in _frame_reset().
+    output wire [3:0]               o_skip_n,
+    output wire                     o_skip_load,
+
     // ---- AXI4-Lite control/status (S_AXI_LITE) ----
     input  wire [7:0]               s_axi_lite_awaddr,
     input  wire                     s_axi_lite_awvalid,
@@ -120,6 +126,8 @@ module phase_correlator_axi #(
         .clk (aclk),
         .rst (rst),
         .o_dpath_reset (dpath_reset),
+        .o_skip_n      (o_skip_n),
+        .o_skip_load   (o_skip_load),
 
         // AXI-Lite (subordinate)
         .s_axil__awaddr  (s_axi_lite_awaddr),
