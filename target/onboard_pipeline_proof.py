@@ -10,15 +10,12 @@ S2MM does not stop on TLAST, so the real n-beat frame floats at offset=prefix_le
         align by exact match against ModelBackend.
   * rescale_phase -- CORDIC, bounded |.|<=2 quantization vs the float model:
         align by the offset with ~zero tolerance-violating beats.
-  * fft_pass -- CANNOT run on this bitstream: the FFT IP frames by counting N
-        input beats per row, but the switch/DMA-re-arm prepends a nondeterministic
-        INPUT prefix that shifts every row boundary and destroys the transform
-        (output differs run-to-run; matches the model |spectrum| at no offset).
-        This is not position-robust like the per-beat kernels and not recoverable
-        in software.  The FFT IP is separately xsim-verified (sim/fft_cosim.py),
-        so the model FFT is substituted here to exercise the rest of the
-        integrated HW datapath.  Fixing the FFT input framing is the next
-        bitstream's job -- it is the sole remaining pipeline blocker.
+  * fft_pass -- HW FFT differs from the model by a per-bin complex factor C
+        (phase ramp + BFP scale) that only cancels in phase-only cross-power,
+        so it is NOT model-alignable.  Align reference-free by TWO-RUN
+        consistency: the HW FFT of identical input is deterministic, so the real
+        frame is the unique n-beat window that matches between two runs whose
+        prefixes differ.
 
 Run as root on the board:
     sudo PYTHONPATH=target/src:golden_model/src python3 target/onboard_pipeline_proof.py
@@ -158,6 +155,25 @@ def _align_tol_cplx(re, im, m_re, m_im, n, tol):
     if best[0] > n // 100:
         raise RuntimeError("rescale: weak alignment, min bad=%d" % best[0])
     return best[1]
+
+
+def _align_tworun(a_re, a_im, b_re, b_im, n):
+    """Find the offset of the common n-beat frame between two identical-input runs
+    whose prefixes differ.  The frame is the unique (oa, ob) with exact n-beat
+    equality; ambiguity (prefixes coincided) raises."""
+    matches = []
+    for oa in range(OV + 1):
+        fa_re, fa_im = a_re[oa:oa+n], a_im[oa:oa+n]
+        for ob in range(OV + 1):
+            if (np.array_equal(fa_re, b_re[ob:ob+n]) and
+                    np.array_equal(fa_im, b_im[ob:ob+n])):
+                matches.append((oa, ob))
+    oas = {oa for oa, _ in matches}
+    if not matches:
+        raise RuntimeError("fft two-run: no common frame (prefix > OV?)")
+    if len(oas) != 1:
+        raise RuntimeError("fft two-run: ambiguous (prefixes coincided): %r" % sorted(oas))
+    return matches[0][0]
 
 
 def main():
