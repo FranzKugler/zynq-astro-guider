@@ -18,6 +18,7 @@ FftStub for pysim of this framing logic. The transform values themselves are
 verified against the real IP in Vivado xsim (sim/fft_cosim.py); pysim here only
 exercises the streaming/handshake glue.
 """
+import math
 from amaranth import *
 from amaranth.lib import wiring
 from amaranth.lib.wiring import In, Out
@@ -33,6 +34,11 @@ class FftPass(wiring.Component):
         self.mant_bits = mant_bits
         self.core = core or FftIP(n=n, input_width=mant_bits,
                                   phase_width=phase_width)
+        # Scaled-mode config: SCALE_SCH = ÷2 at every stage; cfg_width in bits
+        self._stages   = int(math.log2(n))
+        self._scale_sch = (4**self._stages - 1) // 3  # 0x5555 for N=256
+        cfg_width = ((2 * self._stages + 1 + 7) // 8) * 8
+        self._cfg_pad  = cfg_width - 2 * self._stages - 1
         super().__init__({
             "inp":           In(Stream(complex_layout(mant_bits))),
             "out":           Out(Stream(complex_layout(mant_bits))),
@@ -56,10 +62,13 @@ class FftPass(wiring.Component):
         # s_cfg_tready after accepting the config word and only reasserts it
         # after the full frame output.  Clearing configured while s_cfg_tready
         # is 0 causes a permanent deadlock (configured can never become 1).
+        #
         configured = Signal()
         inverse_last = Signal()
         m.d.comb += [
-            core.s_cfg_tdata.eq(Cat(~self.inverse, C(0, 7))),
+            core.s_cfg_tdata.eq(Cat(~self.inverse,
+                                    C(self._scale_sch, 2 * self._stages),
+                                    C(0, self._cfg_pad))),
             core.s_cfg_tvalid.eq(~configured),
         ]
         # Direction changed since the last accepted config -> force reload.

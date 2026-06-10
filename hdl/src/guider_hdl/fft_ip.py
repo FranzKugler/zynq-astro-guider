@@ -9,6 +9,11 @@ This is the synthesis path only -- the IP cannot run in pysim. For simulation
 the FFT is substituted by the model's BFP FFT (see guider_hdl.cosim); the IP
 itself is verified in Vivado xsim against the model, tolerance-based.
 
+Scaling mode: "Scaled" (fixed per-stage schedule).  Config TDATA is
+{padding, SCALE_SCH[2*stages-1:0], FWD_INV} -- width ceil((2*stages+1)/8)*8.
+SCALE_SCH = 0x5555...5555 (01 per stage = ÷2 every stage).  No per-row
+TUSER block exponent (m_blk_exp is always 0 in this mode).
+
 The transform itself is verified: sim/fft_cosim.py drives this exact IP config in
 Vivado xsim and matches a numpy DFT to ~1e-5 (see that module). The streaming core
 frames at a fixed phase offset from the input tlast (captured frame == DFT of a +1
@@ -24,6 +29,7 @@ relative to it, not steered by it; rely on the common-rotation cancellation
 above rather than chasing a tlast alignment.
 """
 from __future__ import annotations
+import math
 from amaranth import *
 
 
@@ -43,8 +49,10 @@ class FftIP(Elaboratable):
 
         icw = _field_width(input_width)
         ocw = _field_width(self.output_width)
-        # config word: FWD/INV (+ per-stage scaling for non-BFP, unused here)
-        self.cfg_width = 8
+        # Scaled mode config: {padding, SCALE_SCH[2*stages-1:0], FWD_INV}
+        # rounded up to the nearest byte.  For N=256 (8 stages): 24 bits.
+        stages = int(math.log2(n))
+        self.cfg_width = ((2 * stages + 1 + 7) // 8) * 8
 
         # --- slave config channel ---
         self.s_cfg_tdata = Signal(self.cfg_width)
@@ -76,16 +84,15 @@ class FftIP(Elaboratable):
 
         s_tdata = Signal(2 * icw)
         m_tdata = Signal(2 * ocw)
-        m_tuser = Signal(24)
         # pack: real low, imag high, each sign-extended to a byte-aligned field
         re_f, im_f = Signal(icw), Signal(icw)
         m.d.comb += [re_f.eq(self.s_re), im_f.eq(self.s_im),
                      s_tdata.eq(Cat(re_f, im_f))]
-        # unpack output + block exponent
+        # unpack output; m_blk_exp is always 0 in Scaled mode (no TUSER exponent)
         m.d.comb += [
             self.m_re.eq(m_tdata[:ocw][:self.output_width].as_signed()),
             self.m_im.eq(m_tdata[ocw:][:self.output_width].as_signed()),
-            self.m_blk_exp.eq(m_tuser[:8]),
+            self.m_blk_exp.eq(0),
         ]
 
         m.submodules.ip = Instance(
@@ -100,7 +107,6 @@ class FftIP(Elaboratable):
             i_s_axis_data_tlast=self.s_tlast,
             o_s_axis_data_tready=self.s_tready,
             o_m_axis_data_tdata=m_tdata,
-            o_m_axis_data_tuser=m_tuser,
             o_m_axis_data_tvalid=self.m_tvalid,
             o_m_axis_data_tlast=self.m_tlast,
             i_m_axis_data_tready=self.m_tready,

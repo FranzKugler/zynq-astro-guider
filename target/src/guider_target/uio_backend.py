@@ -318,25 +318,9 @@ class UioBackend(PLBackend):
         out, _ = _read_scalar(bO, W_OUT, n)
         return out.reshape(samples.shape)
 
-    # ---- fft pass: N rows of N-point BFP FFT/IFFT along axis 1 ----
+    # ---- fft pass: N rows of N-point Scaled FFT/IFFT along axis 1 ----
     def fft_pass(self, re, im, inverse):
-        cfg = self.cfg
-        # The Xilinx FFT IP uses per-row BFP: each row's exponent is chosen
-        # independently.  For FWD this causes inter-row amplitude variation
-        # that survives into cross_power; the global rescale in rescale_phase
-        # then zeroes low-amplitude rows, corrupting the correlation surface
-        # and placing argmax at the wrong location.  For IFFT the peak row
-        # gets a large exponent (heavily downscaled) while noise rows are
-        # barely scaled, also misplacing argmax.
-        # The model uses global BFP (correct for both cases).  Until the IP
-        # is regenerated in Scaled (fixed-schedule) mode, use the software
-        # model for both directions; the hw-custom kernels (window,
-        # cross_power, rescale_phase/CORDIC) are tested separately.
-        from guider_golden.fixed_point import _fft1d_batch
-        re_out, im_out, _ = _fft1d_batch(re.astype(np.int64),
-                                          im.astype(np.int64),
-                                          cfg, inverse)
-        return re_out, im_out
+        return self.fft_pass_hw(re, im, inverse)
 
     def fft_pass_hw(self, re, im, inverse):
         """Drive the PL FFT IP directly (per-row BFP -- use for diagnostics only)."""

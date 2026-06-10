@@ -7,7 +7,7 @@
 #   transform_length  = N             FFT size (guide-frame side, power of two)
 #   input_width       = mant_bits     FFT mantissa per component (model: 18)
 #   phase_factor_width= twiddle_bits  twiddle precision           (model: 16)
-#   scaling_options   = BFP           block floating point        (chosen arch)
+#   scaling_options   = scaled         fixed per-stage scale schedule via SCALE_SCH
 #   rounding_modes    = convergent    == model _round_shift "convergent"
 #   output_ordering   = natural_order == model does input bit-reversal (DIT)
 #
@@ -40,7 +40,7 @@ set_property -dict [list \
     CONFIG.data_format                          fixed_point \
     CONFIG.input_width                          $IW \
     CONFIG.phase_factor_width                   $PW \
-    CONFIG.scaling_options                      block_floating_point \
+    CONFIG.scaling_options                      scaled \
     CONFIG.rounding_modes                       convergent_rounding \
     CONFIG.output_ordering                      natural_order \
     CONFIG.aresetn                              true \
@@ -53,4 +53,4 @@ generate_target {instantiation_template synthesis simulation} [get_ips $IPNAME]
 # Uncomment to also synthesize the IP OOC (slow; needed before xsim cosim):
 # synth_ip [get_ips $IPNAME]
 
-puts "FFT IP '$IPNAME' generated under $OUTDIR (N=$N, input_width=$IW, phase_width=$PW, BFP)."
+puts "FFT IP '$IPNAME' generated under $OUTDIR (N=$N, input_width=$IW, phase_width=$PW, Scaled)."

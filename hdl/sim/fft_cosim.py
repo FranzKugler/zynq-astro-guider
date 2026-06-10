@@ -8,7 +8,7 @@ File-based co-simulation:
   5. dequantize IP output (mantissa * 2**BLK_EXP) and compare to the DFT
 
 The IP's internal schedule is not the model's, so this is tolerance-based; it
-confirms the IP *as configured by gen_fft_ip.tcl* computes the right BFP DFT.
+confirms the IP *as configured by gen_fft_ip.tcl* computes the right Scaled DFT.
 
 Frame phase: the pipelined-streaming core's frame boundary sits at a fixed
 offset from this cold-start testbench's tlast (empirically the captured frame is
@@ -30,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 
+import math
 import numpy as np
 
 HDL = Path(__file__).resolve().parent.parent
@@ -49,14 +50,13 @@ module fft_tb;
   logic aclk = 0, aresetn = 0;
   always #5 aclk = ~aclk;
 
-  logic [7:0]  cfg_tdata; logic cfg_tvalid; logic cfg_tready;
+  logic [23:0] cfg_tdata; logic cfg_tvalid; logic cfg_tready;
   logic [47:0] s_tdata; logic s_tvalid = 0, s_tlast = 0; logic s_tready;
-  logic [47:0] m_tdata; logic [7:0] m_tuser; logic m_tvalid, m_tlast;
+  logic [47:0] m_tdata; logic m_tvalid, m_tlast;
   logic ev_fs, ev_tlu, ev_tlm, ev_sch, ev_dich, ev_doch;
 
   logic [47:0] inmem  [0:K*N-1];
   logic [47:0] outmem [0:K*N-1];
-  logic [7:0]  outexp [0:K*N-1];
   integer oi = 0, i;
 
   {module} dut (
@@ -65,7 +65,7 @@ module fft_tb;
     .s_axis_config_tready(cfg_tready),
     .s_axis_data_tdata(s_tdata), .s_axis_data_tvalid(s_tvalid),
     .s_axis_data_tready(s_tready), .s_axis_data_tlast(s_tlast),
-    .m_axis_data_tdata(m_tdata), .m_axis_data_tuser(m_tuser),
+    .m_axis_data_tdata(m_tdata),
     .m_axis_data_tvalid(m_tvalid), .m_axis_data_tready(1'b1),
     .m_axis_data_tlast(m_tlast),
     .m_axis_status_tdata(), .m_axis_status_tvalid(),
@@ -89,12 +89,12 @@ module fft_tb;
   end
 
   always @(posedge aclk) if (m_tvalid) begin
-    outmem[oi] <= m_tdata; outexp[oi] <= m_tuser; oi <= oi + 1;
+    outmem[oi] <= m_tdata; oi <= oi + 1;
   end
 
   initial begin
     $readmemh("{infile}", inmem);
-    cfg_tdata = 8'h01; cfg_tvalid = 0;          // forward transform
+    cfg_tdata = 24'h{cfg_fwd}; cfg_tvalid = 0;  // forward: FWD_INV=1, SCALE_SCH=all-div2
     repeat (16) @(posedge aclk);
     aresetn = 1;
     repeat (8) @(posedge aclk);                 // let the core settle after reset
@@ -107,7 +107,7 @@ module fft_tb;
     @(posedge aclk);
     while (!cfg_tready) @(posedge aclk);
     cfg_tvalid = 0;
-    $display("streaming %0d frames x %0d samples", K, N);
+    $display("streaming %0d frames x %0d samples (Scaled, SCALE_SCH=0x{scale_sch_hex})", K, N);
     for (i = 0; i < K * N; i = i + 1) begin
       s_tdata = inmem[i]; s_tvalid = 1; s_tlast = ((i % N) == N - 1);
       @(posedge aclk);
@@ -120,7 +120,7 @@ module fft_tb;
       integer f;
       f = $fopen("{outfile}", "w");
       for (i = 0; i < K * N; i = i + 1)
-        $fdisplay(f, "%012h %02h", outmem[i], outexp[i]);
+        $fdisplay(f, "%012h", outmem[i]);
       $fclose(f);
     end
     $finish;
@@ -205,20 +205,24 @@ def run(n: int = 16, seed: int = 0, k: int = 3):
                                 for _ in range(k)
                                 for a, b in zip(re, im)) + "\n")
 
+    stages = int(math.log2(n))
+    scale_sch = (4**stages - 1) // 3   # 0x5555 for N=256: ÷2 at every stage
+    cfg_fwd = (scale_sch << 1) | 1     # FWD_INV=1, SCALE_SCH in bits [2*stages:1]
     tb = COSIM / "fft_tb.sv"
     tb.write_text(TB_TEMPLATE.format(n=n, k=k, module=f"fft_{n}",
-                                     infile=infile, outfile=outfile))
+                                     infile=infile, outfile=outfile,
+                                     cfg_fwd=f"{cfg_fwd:06X}",
+                                     scale_sch_hex=f"{scale_sch:X}"))
 
     xci = _gen_ip(n)
     _run_xsim(xci, tb, outfile, want_lines=k * n)
 
     lines = [l.split() for l in outfile.read_text().split("\n") if l.strip()]
     lines = lines[-n:]                          # last (synced) frame
-    mant = np.array([_unpack_field(int(h, 16), OUTPUT_WIDTH) for h, _ in lines])
-    mant_im = np.array([_unpack_field(int(h, 16) >> FIELD, OUTPUT_WIDTH)
-                        for h, _ in lines])
-    exp = int(lines[0][1], 16)
-    ip = (mant + 1j * mant_im) * (2.0 ** exp)
+    mant    = np.array([_unpack_field(int(h, 16),         OUTPUT_WIDTH) for h, in lines])
+    mant_im = np.array([_unpack_field(int(h, 16) >> FIELD, OUTPUT_WIDTH) for h, in lines])
+    # Scaled mode: all rows divided by 2^stages = fixed scale, no per-row exponent
+    ip = (mant + 1j * mant_im) * float(2**stages)
 
     x = (re + 1j * im).astype(np.complex128)
     truth = np.fft.fft(x)
@@ -229,7 +233,7 @@ def run(n: int = 16, seed: int = 0, k: int = 3):
               for k in range(n)]
     k = int(np.argmin(shifts))
     err = shifts[k]
-    print(f"N={n} BLK_EXP={exp}  |spectrum| err = {mag_err:.2e}  "
+    print(f"N={n} scale=2^{stages}  |spectrum| err = {mag_err:.2e}  "
           f"best-fit DFT err = {err:.2e} at frame roll {k:+d}  (tol {TOL})")
     assert mag_err < TOL, f"FFT IP magnitude error {mag_err:.2e} exceeds {TOL}"
     assert err < TOL, f"FFT IP cosim error {err:.2e} exceeds {TOL} (even best frame roll)"
