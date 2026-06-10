@@ -25,21 +25,17 @@ module phase_correlator_axi #(
     (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
     input  wire                     aresetn,
 
-    // CTRL.dpath_reset (active-HIGH): the PS pulses this to flush the AXIS
-    // switches per frame. In the BD it feeds a proc_sys_reset (mb_debug_sys_rst),
-    // which produces a SYNCHRONOUS, stretched reset for the switches' data path.
-    // Declared active-high so it matches mb_debug_sys_rst (else BD infers
-    // ACTIVE_LOW from the name -> polarity mismatch).
+    // CTRL.dpath_reset (active-HIGH): the PS pulses this to flush sw_in per frame
+    // and resync FftPass. Fed to a proc_sys_reset (mb_debug_sys_rst) for a
+    // synchronous stretched reset. Declared active-high to match mb_debug_sys_rst.
     (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 dpath_reset RST" *)
     (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_HIGH" *)
     output wire                     dpath_reset,
 
-    // StaleAbsorber arm pulse (CTRL[7]).  One-cycle pulse generated one clock
-    // after a CTRL write with bit 7 = 1.  Arms the absorber into ABSORBING
-    // mode; it then drains the AXIS switch SRL stale prefix (2-4 beats ending
-    // with the previous frame's TLAST) before the DMA sees the new frame.
-    // Not sent on the first call after boot (SRL is zero, no stale prefix).
-    output wire                     o_start_absorber,
+    // axis_out_mux control (CTRL[7]=commit 1-cycle pulse, CTRL[9:8]=sel 2-bit route).
+    // Replaces the Xilinx AXIS switch for the output path: no SRL pipeline = no stale.
+    output wire                     o_sw_out_commit,
+    output wire [1:0]               o_sw_out_sel,
 
     // ---- AXI4-Lite control/status (S_AXI_LITE) ----
     input  wire [7:0]               s_axi_lite_awaddr,
@@ -127,7 +123,8 @@ module phase_correlator_axi #(
         .clk (aclk),
         .rst (rst),
         .o_dpath_reset     (dpath_reset),
-        .o_start_absorber  (o_start_absorber),
+        .o_sw_out_commit   (o_sw_out_commit),
+        .o_sw_out_sel      (o_sw_out_sel),
 
         // AXI-Lite (subordinate)
         .s_axil__awaddr  (s_axi_lite_awaddr),

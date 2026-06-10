@@ -6,8 +6,9 @@ slave (the PS's control plane) plus the AXIS data ports. This is the register ma
 
 Register map (byte offset, 32-bit words):
   0x00 CTRL      RW  [0] fft_inverse           [5:1] rescale_sh
-                     [6] dpath_reset (level: flush AXIS switches via rst_dpath +
-                         resync FftPass row/o_cnt; PS pulses before each frame)
+                     [6] dpath_reset (level: flush sw_in + resync FftPass row/o_cnt)
+                     [7] sw_out_commit (1-cycle pulse: latch sw_out_sel into mux)
+                     [9:8] sw_out_sel (2-bit: 0=WIN 1=FFT 2=XP_R 3=RESC_P)
   0x04 STATUS    R   [0] xpower_done (sticky)  [1] fft_done (sticky)
                  W   write-1-to-clear those sticky bits
   0x08 XPMAX_LO  R   xpower_max[31:0]   (latched on xpower_max_valid)
@@ -62,8 +63,9 @@ class PhaseCorrelatorCsr(wiring.Component):
             "o_fft_inverse":      Out(1),
             "o_rescale_sh":       Out(sh_bits),
             "o_dpath_reset":      Out(1),
-            # control outputs -> StaleAbsorber
-            "o_start_absorber":   Out(1),
+            # control outputs -> axis_out_mux (custom 4:1 mux replacing sw_out IP)
+            "o_sw_out_commit":    Out(1),
+            "o_sw_out_sel":       Out(2),
             # status inputs <- PhaseCorrelatorPL
             "i_xpower_max":       In(max_bits),
             "i_xpower_max_valid": In(1),
@@ -78,16 +80,18 @@ class PhaseCorrelatorCsr(wiring.Component):
         fft_inverse = Signal()
         rescale_sh = Signal(self.sh_bits)
         dpath_reset = Signal()
-        start_absorber = Signal()
+        sw_out_commit = Signal()
+        sw_out_sel = Signal(2)
         xpower_done = Signal()
         fft_done = Signal()
         xpmax = Signal(self.max_bits)
         blkexp = Signal(self.blk_bits)
-        m.d.sync += start_absorber.eq(0)   # default: deassert every cycle
+        m.d.sync += sw_out_commit.eq(0)   # default: deassert every cycle
         m.d.comb += [self.o_fft_inverse.eq(fft_inverse),
                      self.o_rescale_sh.eq(rescale_sh),
                      self.o_dpath_reset.eq(dpath_reset),
-                     self.o_start_absorber.eq(start_absorber)]
+                     self.o_sw_out_commit.eq(sw_out_commit),
+                     self.o_sw_out_sel.eq(sw_out_sel)]
 
         # --- status capture (one-cycle strobes -> latched value + sticky flag) ---
         with m.If(self.i_xpower_max_valid):
@@ -113,7 +117,8 @@ class PhaseCorrelatorCsr(wiring.Component):
                             m.d.sync += [fft_inverse.eq(ax.wdata[0]),
                                          rescale_sh.eq(ax.wdata[1:1 + self.sh_bits]),
                                          dpath_reset.eq(ax.wdata[6]),
-                                         start_absorber.eq(ax.wdata[7])]  # 1-cycle arm pulse
+                                         sw_out_commit.eq(ax.wdata[7]),   # 1-cycle pulse
+                                         sw_out_sel.eq(ax.wdata[8:10])]
                         with m.Case(0x04 >> 2):            # STATUS: W1C
                             with m.If(ax.wdata[0]):
                                 m.d.sync += xpower_done.eq(0)
@@ -178,8 +183,9 @@ class PhaseCorrelatorTop(wiring.Component):
             max_bits=self._pl._cross.in_bits, blk_bits=16)
         members = self._pl.signature.members
         sig = {"s_axil": In(AXILite()),
-               "o_dpath_reset": Out(1),
-               "o_start_absorber": Out(1)}
+               "o_dpath_reset":   Out(1),
+               "o_sw_out_commit": Out(1),
+               "o_sw_out_sel":    Out(2)}
         for name in self._INPUTS:
             sig[name] = In(AXIStream(members[name].signature.payload_shape))
         for name in self._OUTPUTS:
@@ -192,14 +198,13 @@ class PhaseCorrelatorTop(wiring.Component):
         m.submodules.csr = csr = self._csr
         connect(m, flipped(self.s_axil), csr.s_axil)
 
-        # The PS pulses CTRL.dpath_reset before each frame; the wrapper exposes it
-        # to the BD, where a proc_sys_reset turns it into a SYNCHRONOUS reset of
-        # the AXIS switches' data path, flushing the switch's stale-beat prefix.
-        # It also drives fft_frame_sync which resets FftPass's row/o_cnt counters.
-        # The FFT IP is NOT reset; direction reload is handled by inverse_last
-        # comparison inside FftPass (see fft_pass.py).
+        # The PS pulses CTRL.dpath_reset before each frame to flush sw_in's SRL
+        # pipeline (via rst_dpath proc_sys_reset) and resync FftPass row/o_cnt.
+        # o_sw_out_commit/sel drive the custom axis_out_mux (no Xilinx switch IP
+        # for the output path = no routing glitch = no stale beats).
         m.d.comb += [self.o_dpath_reset.eq(csr.o_dpath_reset),
-                     self.o_start_absorber.eq(csr.o_start_absorber)]
+                     self.o_sw_out_commit.eq(csr.o_sw_out_commit),
+                     self.o_sw_out_sel.eq(csr.o_sw_out_sel)]
 
         members = self._pl.signature.members
         for name in self._INPUTS:                    # AXIS-native -> FIRST -> kernel

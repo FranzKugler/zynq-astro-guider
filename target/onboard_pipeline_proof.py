@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """M5 pipeline-math proof: run the FULL estimate_shift_pl pipeline on the PL
-hardware, but bypass the bitstream's broken framing by re-aligning every pass
-output to its true frame.  This proves the PL *computation* is correct end-to-end
-(the right shift comes out) before investing in the framing bitstream rebuild.
+hardware, over-capturing S2MM and re-aligning every pass output to its true frame.
+This was written when the bitstream had nondeterministic stale-prefix beats from
+the Xilinx AXIS switch.  With the axis_out_mux bitstream the prefix is zero and
+alignment always finds offset=0, but the harness still works correctly.
 
-Alignment per pass (the switch emits a nondeterministic <=OVERHEAD-beat prefix;
-S2MM does not stop on TLAST, so the real n-beat frame floats at offset=prefix_len):
+Alignment per pass (S2MM does not stop on TLAST; real n-beat frame at offset=prefix):
   * window, cross_power -- deterministic integer kernels, bit-exact vs the model:
         align by exact match against ModelBackend.
   * rescale_phase -- CORDIC, bounded |.|<=2 quantization vs the float model:
         align by the offset with ~zero tolerance-violating beats.
-  * fft_pass -- HW FFT differs from the model by a per-bin complex factor C
-        (phase ramp + BFP scale) that only cancels in phase-only cross-power,
-        so it is NOT model-alignable.  Align reference-free by TWO-RUN
-        consistency: the HW FFT of identical input is deterministic, so the real
-        frame is the unique n-beat window that matches between two runs whose
-        prefixes differ.
+  * fft_pass -- substituted by model FFT (HW FFT is per-row BFP, incompatible
+        with global-BFP model); the rest of the integrated HW datapath is exercised.
 
 Run as root on the board:
     sudo PYTHONPATH=target/src:golden_model/src python3 target/onboard_pipeline_proof.py
@@ -50,14 +46,13 @@ class AligningBackend(PLBackend):
         """ins = [(dma, buf, lo_array_or_None, ...)] already-written; returns the
         raw S2MM buffer object after a transfer of (n+OV) beats."""
         hw = self.hw
+        hw.slcr.reset_fpga0()
         _dma_reset(hw.dma0); _dma_reset(hw.dma1)
-        hw.sw_in.soft_reset(); hw.sw_out.soft_reset()
-        if ctrl is not None:
-            hw.csr.wr(CSR_CTRL, ctrl)
+        hw.sw_in.soft_reset()
         for buf, writer in ins:
             writer(buf)
         hw.sw_in.route(route_in, 6)
-        hw.sw_out.route(route_out, 1)
+        hw._sw_out_route(ctrl if ctrl is not None else 0, route_out[0])
         bO = hw.buf[2] if len(ins) == 2 else hw.buf[1]
         _dma_kick(hw.dma0, S2MM_CR, S2MM_DA, S2MM_LEN, bO.phys, (n + OV) * WORD_BYTES)
         for i, (buf, _w) in enumerate(ins):

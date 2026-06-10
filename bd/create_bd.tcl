@@ -29,7 +29,7 @@ set ROOT     [file normalize [file dirname [info script]]/..]
 set PROJDIR  $ROOT/hdl/build/vivado_bd
 set RTL_TOP     $ROOT/hdl/build/rtl/phase_correlator_top.v
 set RTL_WRAP    $ROOT/bd/phase_correlator_axi.v
-set RTL_ABSORB  $ROOT/bd/stale_absorber.v
+set RTL_OMUX    $ROOT/bd/axis_out_mux.v
 set TDATA_BYTES 16                                   ;# 128-bit uniform AXIS
 
 if {![file exists $RTL_TOP]} {
@@ -39,8 +39,8 @@ if {![file exists $RTL_TOP]} {
 file mkdir $PROJDIR
 create_project -force ${DESIGN} $PROJDIR -part $PART
 
-# --- the Amaranth top + the AXI rename wrapper + the stale absorber as RTL sources ---
-add_files -norecurse [list $RTL_TOP $RTL_WRAP $RTL_ABSORB]
+# --- the Amaranth top + the AXI rename wrapper + the custom output mux as RTL sources ---
+add_files -norecurse [list $RTL_TOP $RTL_WRAP $RTL_OMUX]
 
 # --- the Xilinx FFT IP the top instantiates as the black box fft_<N> ---
 # Only needed for synthesis (MODE=all): validate_bd treats fft_<N> as an
@@ -146,18 +146,17 @@ proc mk_switch {name nsi nmi} {
     return $s
 }
 mk_switch sw_in  2 6     ;# 2 MM2S -> 6 kernel inputs
-mk_switch sw_out 4 1     ;# 4 kernel outputs -> 1 S2MM
 
 # --- control bus: PS GP0 -> SmartConnect -> all AXI-Lite slaves ---
+# sw_out replaced by axis_out_mux (RTL, no AXI-Lite) -> one fewer MI port
 set scc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smc_ctrl]
 set_property CONFIG.NUM_SI {1} $scc
-set_property CONFIG.NUM_MI {5} $scc
+set_property CONFIG.NUM_MI {4} $scc
 connect_bd_intf_net $gp0 [get_bd_intf_pins smc_ctrl/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M00_AXI] [get_bd_intf_pins pc/S_AXI_LITE]
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M01_AXI] [get_bd_intf_pins dma0/S_AXI_LITE]
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M02_AXI] [get_bd_intf_pins dma1/S_AXI_LITE]
 connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M03_AXI] [get_bd_intf_pins sw_in/S_AXI_CTRL]
-connect_bd_intf_net [get_bd_intf_pins smc_ctrl/M04_AXI] [get_bd_intf_pins sw_out/S_AXI_CTRL]
 
 # --- memory bus: all DMA masters -> SmartConnect -> PS HP0 ---
 set scm [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smc_mem]
@@ -179,52 +178,44 @@ foreach k $sw_in_dst {
     incr i
 }
 
-# --- data path: kernel outputs -> sw_out -> S2MM ---
-set sw_out_src {window_out fft_out xpower_r rescale_p}
+# --- data path: kernel outputs -> axis_out_mux -> S2MM ---
+# Custom 4:1 registered mux (no Xilinx AXIS switch = no SRL pipeline = no stale beats).
+# sel+commit driven from CSR CTRL[9:8] and CTRL[7] via pc/o_sw_out_sel, o_sw_out_commit.
+set omux [create_bd_cell -type module -reference axis_out_mux omux]
+set omux_src {window_out fft_out xpower_r rescale_p}
 set i 0
-foreach k $sw_out_src {
+foreach k $omux_src {
     connect_bd_intf_net [get_bd_intf_pins pc/M_AXIS_[string toupper $k]] \
-        [get_bd_intf_pins sw_out/S0${i}_AXIS]
+        [get_bd_intf_pins omux/S0${i}_AXIS]
     incr i
 }
-# --- stale absorber between sw_out M00_AXIS and dma0 S_AXIS_S2MM ---
-# The AXIS switch SRL is not reset by aresetn; its tail content from the
-# previous frame appears as a 2-4 beat stale prefix on the next frame.
-# skip_n (from CSR CTRL[10:7]) is loaded one cycle after each CTRL write;
-# the absorber silently drains those beats before the DMA sees them.
-set absorber [create_bd_cell -type module -reference stale_absorber absorber]
-connect_bd_intf_net [get_bd_intf_pins sw_out/M00_AXIS]  [get_bd_intf_pins absorber/S_AXIS]
-connect_bd_intf_net [get_bd_intf_pins absorber/M_AXIS]  [get_bd_intf_pins dma0/S_AXIS_S2MM]
+connect_bd_intf_net [get_bd_intf_pins omux/M00_AXIS] [get_bd_intf_pins dma0/S_AXIS_S2MM]
 
 # --- clocks + resets to everything ---
 foreach p {pc/aclk dma0/s_axi_lite_aclk dma0/m_axi_mm2s_aclk dma0/m_axi_s2mm_aclk \
            dma1/s_axi_lite_aclk dma1/m_axi_mm2s_aclk \
-           sw_in/aclk sw_in/s_axi_ctrl_aclk sw_out/aclk sw_out/s_axi_ctrl_aclk \
-           smc_ctrl/aclk smc_mem/aclk ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK \
-           absorber/aclk} {
+           sw_in/aclk sw_in/s_axi_ctrl_aclk \
+           omux/aclk \
+           smc_ctrl/aclk smc_mem/aclk ps7/M_AXI_GP0_ACLK ps7/S_AXI_HP0_ACLK} {
     connect_bd_net $fclk [get_bd_pins $p]
 }
 foreach p {pc/aresetn dma0/axi_resetn dma1/axi_resetn \
-           sw_in/s_axi_ctrl_aresetn sw_out/s_axi_ctrl_aresetn \
-           smc_ctrl/aresetn smc_mem/aresetn \
-           absorber/aresetn} {
+           sw_in/s_axi_ctrl_aresetn \
+           omux/aresetn \
+           smc_ctrl/aresetn smc_mem/aresetn} {
     connect_bd_net $arstn [get_bd_pins $p]
 }
-# The AXIS switches' DATA-path reset comes from a dedicated proc_sys_reset driven
-# by CTRL.dpath_reset (pc/dpath_reset, active-high -> mb_debug_sys_rst), so the PS
-# can flush the switch's stale-beat prefix per frame with a SYNCHRONOUS, stretched
-# reset (a bare combinational gate would be an async reset -- BD 41-1347). It also
-# resets on the global FCLK_RESET0_N. Their control-plane (s_axi_ctrl_aresetn)
-# stays on the global reset so routing writes work while the data path is flushed.
+# dpath_reset: synchronous per-frame reset for sw_in's SRL data path + fft_frame_sync.
+# sw_out is now axis_out_mux (no SRL pipeline) and does not need this reset.
 set rst_dpath [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset rst_dpath]
 connect_bd_net $fclk [get_bd_pins rst_dpath/slowest_sync_clk]
 connect_bd_net [get_bd_pins ps7/FCLK_RESET0_N] [get_bd_pins rst_dpath/ext_reset_in]
 connect_bd_net [get_bd_pins pc/dpath_reset] [get_bd_pins rst_dpath/mb_debug_sys_rst]
-connect_bd_net [get_bd_pins rst_dpath/peripheral_aresetn] \
-    [get_bd_pins sw_in/aresetn] [get_bd_pins sw_out/aresetn]
+connect_bd_net [get_bd_pins rst_dpath/peripheral_aresetn] [get_bd_pins sw_in/aresetn]
 
-# CSR -> absorber arm pulse
-connect_bd_net [get_bd_pins pc/o_start_absorber] [get_bd_pins absorber/start]
+# CSR -> axis_out_mux control (commit = 1-cycle pulse; sel = 2-bit route)
+connect_bd_net [get_bd_pins pc/o_sw_out_commit] [get_bd_pins omux/commit]
+connect_bd_net [get_bd_pins pc/o_sw_out_sel]    [get_bd_pins omux/sel]
 
 assign_bd_address
 
